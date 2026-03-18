@@ -1,93 +1,160 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect } from "react";
 import axios from "axios";
 import {
   Package, Calendar, MapPin, Trash2, RotateCcw, CheckCircle,
-  AlertTriangle, Tag, StickyNote, ChevronDown, Clock,
+  AlertTriangle, Tag, StickyNote, ChevronDown,
   AlertOctagon, Leaf, RefreshCw, Search, X,
-  Edit2, Save, XCircle, Filter, Grid3X3, List,
-  Clock as ClockIcon, Snowflake, ShieldCheck, Zap
+  Edit2, Save, XCircle, ShieldCheck,
+  Clock as ClockIcon, Snowflake, Filter, AlertCircle, Info
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 
-// ─── helpers ──────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+//  SMART FRESHNESS ENGINE  (category + location → dynamic shelf logic)
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Base notify window (days before expiry to start warning)
+const CATEGORY_BASE = {
+  Dairy:      { risk:"high",   base:3,  afterExpiry:"risky"         },
+  Meat:       { risk:"high",   base:3,  afterExpiry:"risky"         },
+  Vegetables: { risk:"medium", base:4,  afterExpiry:"check"         },
+  Fruits:     { risk:"medium", base:3,  afterExpiry:"check"         },
+  Snacks:     { risk:"low",    base:10, afterExpiry:"probably_safe" },
+  Grains:     { risk:"low",    base:10, afterExpiry:"probably_safe" },
+  Beverages:  { risk:"low",    base:7,  afterExpiry:"check"         },
+  Frozen:     { risk:"low",    base:10, afterExpiry:"quality_reduce"},
+  Other:      { risk:"medium", base:7,  afterExpiry:"check"         },
+};
+
+// Location adjustments (+ = add more days to window, − = reduce)
+const LOCATION_ADJ = {
+  Freezer:      -5,  // freezer extends safety; notify later (smaller window)
+  Refrigerator: -2,  // fridge extends safety
+  Pantry:        0,
+  Cabinet:       0,
+  Other:        +1,  // unknown = slightly earlier warning
+};
+
+// Dangerous combos — immediate warning regardless of days
+const UNSAFE_COMBOS = [
+  { category:"Meat",  location:"Pantry",   msg:"⚠️ Unsafe storage! Meat in pantry is dangerous — move to refrigerator or freezer immediately." },
+  { category:"Dairy", location:"Pantry",   msg:"⚠️ Dairy items need refrigeration. Move to fridge immediately." },
+  { category:"Meat",  location:"Cabinet",  msg:"⚠️ Meat should not be stored in a cabinet. Refrigerate or freeze immediately." },
+];
+
+function getUnsafeWarning(category, location) {
+  return UNSAFE_COMBOS.find(c => c.category === category && c.location === location) || null;
+}
+
+// Smart notify threshold for a product
+function getNotifyThreshold(category, location) {
+  const base = CATEGORY_BASE[category]?.base ?? 7;
+  const adj  = LOCATION_ADJ[location]   ?? 0;
+  return Math.max(1, base + adj);
+}
+
+// After-expiry safety status
+function getAfterExpiryStatus(category, location) {
+  const base = CATEGORY_BASE[category]?.afterExpiry ?? "check";
+  // Frozen overrides everything after expiry
+  if (location === "Freezer") return "quality_reduce";
+  // Snacks/Grains in any storage → probably safe
+  if (base === "probably_safe") return "probably_safe";
+  return base;
+}
+
+// ── Main bucket logic ─────────────────────────────────────────────────────────
+function getProductBucket(p) {
+  if (p.status === "used")   return "used";
+  if (p.status === "wasted") return "wasted";
+
+  const days      = getDaysUntilExpiry(p.expiryDate);
+  const threshold = getNotifyThreshold(p.category, p.location);
+
+  if (days < 0)          return "expired";
+  if (days < threshold)  return "expiringSoon";
+  return "fresh";
+}
+
+// ── Freshness % — smart, based on category's notify threshold ─────────────────
+// For expiring soon: 1 day = 10%, 2 days = 20%, up to threshold = 100%
+// For fresh: scale from threshold to 180 days max
+function getFreshnessPct(days, category, location) {
+  if (days < 0) return 0;
+  const threshold = getNotifyThreshold(category, location);
+
+  if (days <= threshold) {
+    // Expiring soon zone: 1 day ≈ (1/threshold)*100, capped at 100
+    return Math.round((days / threshold) * 100);
+  }
+  // Fresh zone: scale threshold→180 days to 100%→100% (already full)
+  // We want: at threshold days → exactly 100%, beyond → stays 100%
+  const maxFresh = Math.max(180, threshold + 30);
+  const pct = Math.round(((days - threshold) / (maxFresh - threshold)) * 20 + 80);
+  return Math.min(pct, 100);
+}
+
 function getDaysUntilExpiry(expiryDate) {
   const today = new Date(); today.setHours(0,0,0,0);
   const exp   = new Date(expiryDate); exp.setHours(0,0,0,0);
   return Math.ceil((exp - today) / 86400000);
 }
 
-function getProductBucket(p) {
-  if (p.status === "used")   return "used";
-  if (p.status === "wasted") return "wasted";
-  const d = getDaysUntilExpiry(p.expiryDate);
-  if (d < 0)  return "expired";
-  if (d <= 6) return "expiringSoon";
-  return "fresh";
+// ── Bar colour by pct ─────────────────────────────────────────────────────────
+function getBarColor(pct, bucket) {
+  if (bucket === "expiringSoon") return "#FF9E00"; // always amber-orange for expiring
+  if (pct <= 10)  return "#EF4444";  // red
+  if (pct <= 20)  return "#F97316";  // orange-red
+  if (pct <= 30)  return "#FB923C";  // mild orange
+  if (pct <= 50)  return "#FBBF24";  // amber
+  if (pct <= 70)  return "#84CC16";  // lime-green
+  if (pct <= 85)  return "#48A111";  // good green
+  return "#3a8a0d";                  // deep green — excellent
 }
 
-// ─── Per-bucket visual config ─────────────────────────────────────────────────
+function getBarLabelColor(pct, bucket) {
+  if (bucket === "expiringSoon") return "#D97706";
+  if (pct <= 10)  return "#DC2626";
+  if (pct <= 30)  return "#EA580C";
+  if (pct <= 50)  return "#D97706";
+  return "#48A111";
+}
+
+// ── Smart status label ────────────────────────────────────────────────────────
+function getSmartStatusLabel(p, days, bucket) {
+  if (bucket === "used")   return { label:"Used",         color:"#0369A1", icon: ShieldCheck  };
+  if (bucket === "wasted") return { label:"Wasted",       color:"#64748B", icon: AlertTriangle };
+
+  const threshold = getNotifyThreshold(p.category, p.location);
+
+  if (bucket === "expired") {
+    const status = getAfterExpiryStatus(p.category, p.location);
+    if (status === "quality_reduce") return { label:"Quality ↓",     color:"#7C3AED", icon: AlertCircle  };
+    if (status === "probably_safe")  return { label:"Check Quality", color:"#D97706", icon: Info         };
+    if (status === "check")          return { label:"Check Quality", color:"#D97706", icon: Info         };
+    return                                  { label:"Risky",         color:"#DC2626", icon: AlertOctagon };
+  }
+
+  if (bucket === "expiringSoon") {
+    if (days <= 1) return { label:"Expires Today!", color:"#DC2626", icon: ClockIcon };
+    return                { label:`${days}d left`,  color:"#D97706", icon: ClockIcon };
+  }
+
+  // Fresh
+  if (days > threshold + 30) return { label:"Very Fresh", color:"#48A111", icon: Leaf };
+  if (days > threshold + 7)  return { label:"Fresh",      color:"#48A111", icon: Leaf };
+  return                            { label:"Fresh",      color:"#48A111", icon: Leaf };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  VISUAL CONFIG  (unchanged — do not touch UI)
+// ─────────────────────────────────────────────────────────────────────────────
 const BUCKET = {
-  fresh:        {
-    label:"Fresh", icon: Leaf,
-    // Pure fresh green — no cyan, visually communicates healthy & safe
-    stripe:  "from-[#48A111] to-[#3a8a0d]",
-    cardBg:  "bg-[#CBF3BB]",
-    cardBgHex: "#CBF3BB",
-    badge:   "bg-[#48A111]/10 text-[#48A111] border-[#48A111]/30",
-    border:  "border-[#48A111]/40",
-    ring:    "ring-[#48A111]/20",
-    glow:    "shadow-[#48A111]/10",
-    dot:     "bg-[#48A111]",
-    corner:  "rounded-3xl",
-  },
-  expiringSoon: {
-    label:"Expiring Soon", icon: ClockIcon,   // Clock instead of Fire
-    stripe:  "from-amber-400 to-orange-400",
-    cardBg:  "bg-[#FDE7B3]",
-    cardBgHex: "#FDE7B3",
-    badge:   "bg-amber-50 text-amber-700 border-amber-200",
-    border:  "border-amber-300",
-    ring:    "ring-amber-100",
-    glow:    "shadow-amber-100",
-    dot:     "bg-amber-400",
-    corner:  "rounded-2xl",
-  },
-  expired:      {
-    label:"Expired", icon: AlertOctagon,
-    stripe:  "from-rose-500 to-red-500",
-    cardBg:  "bg-[#FFA27F]/40",
-    cardBgHex: "#FFA27F66",
-    badge:   "bg-rose-50 text-rose-700 border-rose-200",
-    border:  "border-rose-300",
-    ring:    "ring-rose-100",
-    glow:    "shadow-rose-100",
-    dot:     "bg-rose-500",
-    corner:  "rounded-xl",
-  },
-  used:         {
-    label:"Used", icon: ShieldCheck,
-    stripe:  "from-sky-400 to-blue-500",
-    cardBg:  "bg-sky-50",
-    cardBgHex: "#f0f9ff",
-    badge:   "bg-sky-50 text-sky-700 border-sky-200",
-    border:  "border-sky-200",
-    ring:    "ring-sky-100",
-    glow:    "shadow-sky-100",
-    dot:     "bg-sky-400",
-    corner:  "rounded-3xl",
-  },
-  wasted:       {
-    label:"Wasted", icon: AlertTriangle,
-    stripe:  "from-slate-400 to-gray-500",
-    cardBg:  "bg-slate-100",
-    cardBgHex: "#f1f5f9",
-    badge:   "bg-slate-100 text-slate-500 border-slate-200",
-    border:  "border-slate-300",
-    ring:    "ring-slate-100",
-    glow:    "shadow-slate-100",
-    dot:     "bg-slate-400",
-    corner:  "rounded-2xl",
-  },
+  fresh:        { stripe:"from-[#48A111] to-[#3a8a0d]", cardBgHex:"#CBF3BB", badge:"bg-[#48A111]/10 text-[#48A111] border-[#48A111]/30", border:"border-[#48A111]/40", ring:"ring-[#48A111]/20", glow:"shadow-[#48A111]/10", corner:"rounded-3xl",  icon: Leaf         },
+  expiringSoon: { stripe:"from-amber-400 to-orange-400", cardBgHex:"#FDE7B3", badge:"bg-amber-50 text-amber-700 border-amber-200",        border:"border-amber-300",    ring:"ring-amber-100",    glow:"shadow-amber-100",    corner:"rounded-2xl",  icon: ClockIcon    },
+  expired:      { stripe:"from-rose-500 to-red-500",     cardBgHex:"#FFA27F66",badge:"bg-rose-50 text-rose-700 border-rose-200",          border:"border-rose-300",     ring:"ring-rose-100",     glow:"shadow-rose-100",     corner:"rounded-xl",   icon: AlertOctagon },
+  used:         { stripe:"from-sky-400 to-blue-500",     cardBgHex:"#f0f9ff",  badge:"bg-sky-50 text-sky-700 border-sky-200",             border:"border-sky-200",      ring:"ring-sky-100",      glow:"shadow-sky-100",      corner:"rounded-3xl",  icon: ShieldCheck  },
+  wasted:       { stripe:"from-slate-400 to-gray-500",   cardBgHex:"#f1f5f9",  badge:"bg-slate-100 text-slate-500 border-slate-200",      border:"border-slate-300",    ring:"ring-slate-100",    glow:"shadow-slate-100",    corner:"rounded-2xl",  icon: AlertTriangle},
 };
 
 const FILTERS = [
@@ -111,17 +178,19 @@ const COLOR_MAP = {
 const CATEGORIES = ["Dairy","Vegetables","Fruits","Meat","Grains","Beverages","Snacks","Frozen","Other"];
 const LOCATIONS  = ["Pantry","Refrigerator","Freezer","Cabinet","Other"];
 
-// ─── Component ────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+//  COMPONENT
+// ─────────────────────────────────────────────────────────────────────────────
 export default function ProductList() {
   const [products,    setProducts]    = useState([]);
   const [loading,     setLoading]     = useState(true);
   const [activeFilter,setActiveFilter]= useState("all");
   const [search,      setSearch]      = useState("");
-  const [sortBy,         setSortBy]         = useState("expiry");
-  const [viewMode,       setViewMode]       = useState("grid");
-  const [showSort,       setShowSort]       = useState(false);
-  const [selectedCat,    setSelectedCat]    = useState("all");
-  const [showCatMenu,    setShowCatMenu]    = useState(false);
+  const [sortBy,      setSortBy]      = useState("expiry");
+  const [viewMode]                    = useState("grid");
+  const [showSort,    setShowSort]    = useState(false);
+  const [selectedCat, setSelectedCat] = useState("all");
+  const [showCatMenu, setShowCatMenu] = useState(false);
   const [editId,      setEditId]      = useState(null);
   const [editData,    setEditData]    = useState({});
   const [editLoading, setEditLoading] = useState(false);
@@ -143,7 +212,6 @@ export default function ProductList() {
     wasted:       products.filter(p => p.status === "wasted").length,
   };
 
-  // derive unique categories from products list
   const allCategories = [...new Set(products.map(p => p.category).filter(Boolean))].sort();
 
   const visible = products
@@ -177,13 +245,7 @@ export default function ProductList() {
 
   const startEdit = (p) => {
     setEditId(p._id);
-    setEditData({
-      name:       p.name,
-      category:   p.category||"",
-      expiryDate: p.expiryDate ? p.expiryDate.split("T")[0] : "",
-      location:   p.location||"",
-      notes:      p.notes||"",
-    });
+    setEditData({ name:p.name, category:p.category||"", expiryDate:p.expiryDate?p.expiryDate.split("T")[0]:"", location:p.location||"", notes:p.notes||"" });
   };
 
   const saveEdit = async () => {
@@ -205,23 +267,19 @@ export default function ProductList() {
       {/* ── Header + Search ── */}
       <div className="text-center space-y-4">
         <div>
-          <h1 className="text-3xl font-black tracking-tight" style={{ color: '#48A111' }}>
+          <h1 className="text-3xl font-black tracking-tight" style={{ color:'#48A111' }}>
             Food Inventory
           </h1>
           <p className="text-sm text-gray-400 mt-1 font-medium">Track freshness · Reduce waste · Stay organised</p>
         </div>
-
-        {/* Search */}
         <div className="relative max-w-lg mx-auto">
           <div className="absolute inset-y-0 left-4 flex items-center pointer-events-none">
             <Search size={17} className="text-[#48A111]"/>
           </div>
-          <input
-            type="text" value={search}
-            onChange={e => setSearch(e.target.value)}
+          <input type="text" value={search} onChange={e => setSearch(e.target.value)}
             placeholder="Search by name, category or location…"
             className="w-full pl-11 pr-10 py-3.5 bg-white border-2 rounded-2xl shadow-sm text-sm text-gray-700 placeholder-gray-400 focus:outline-none focus:ring-4 focus:ring-[#48A111]/20 transition-all"
-            style={{ borderColor: '#48A111' }}
+            style={{ borderColor:'#48A111' }}
           />
           {search && (
             <button onClick={() => setSearch("")}
@@ -232,7 +290,7 @@ export default function ProductList() {
         </div>
       </div>
 
-      {/* ── Stat Filter Cards ── */}
+      {/* ── 6 Stat Filter Cards ── */}
       <div className="grid grid-cols-3 md:grid-cols-6 gap-3">
         {FILTERS.map(f => {
           const Icon     = f.icon;
@@ -241,18 +299,13 @@ export default function ProductList() {
           const clr      = COLOR_MAP[f.color];
           return (
             <motion.button key={f.key}
-              whileHover={{ y:-4, scale:1.04 }}
-              whileTap={{ scale:0.97 }}
+              whileHover={{ y:-4, scale:1.04 }} whileTap={{ scale:0.97 }}
               onClick={() => setActiveFilter(f.key)}
               className={`relative flex flex-col items-center gap-1.5 py-4 px-2 rounded-2xl border-2 font-medium transition-all duration-200 shadow-sm
-                ${isActive ? clr.active : `${clr.card} hover:shadow-md`}`}
-            >
+                ${isActive ? clr.active : `${clr.card} hover:shadow-md`}`}>
               <Icon size={20} className={isActive ? "text-white" : clr.text}/>
               <span className={`text-2xl font-black leading-none ${isActive ? "text-white" : clr.num}`}>{count}</span>
-              <span className={`text-[10px] font-semibold text-center leading-tight ${isActive ? "text-white/90" : clr.text}`}>
-                {f.label}
-              </span>
-              {/* Pulse dot for non-zero urgent buckets */}
+              <span className={`text-[10px] font-semibold text-center leading-tight ${isActive ? "text-white/90" : clr.text}`}>{f.label}</span>
               {!isActive && count > 0 && (f.key === "expiringSoon" || f.key === "expired") && (
                 <span className="absolute top-2 right-2 flex h-2.5 w-2.5">
                   <span className={`animate-ping absolute inline-flex h-full w-full rounded-full opacity-60 ${f.key==="expired" ? "bg-rose-400" : "bg-amber-400"}`}/>
@@ -264,60 +317,41 @@ export default function ProductList() {
         })}
       </div>
 
-      {/* ── Toolbar: count + category filter (no view toggle) ── */}
+      {/* ── Toolbar ── */}
       <div className="flex items-center justify-between gap-3 flex-wrap">
-        {/* Left: item count + clear */}
         <div className="flex items-center gap-2 flex-wrap">
           <span className="text-sm font-bold px-3 py-1.5 rounded-full border-2 border-[#48A111]/30 text-[#48A111] bg-[#48A111]/8">
-            {visible.length} {visible.length === 1 ? "item" : "items"}
+            {visible.length} {visible.length===1?"item":"items"}
           </span>
-          {search && (
-            <span className="text-xs text-gray-400 italic">matching "{search}"</span>
-          )}
+          {search && <span className="text-xs text-gray-400 italic">matching "{search}"</span>}
           {activeFilter !== "all" && (
-            <button onClick={() => setActiveFilter("all")}
-              className="flex items-center gap-1 text-xs text-gray-400 hover:text-gray-600 transition-colors">
+            <button onClick={() => setActiveFilter("all")} className="flex items-center gap-1 text-xs text-gray-400 hover:text-gray-600 transition-colors">
               <X size={11}/> Clear filter
             </button>
           )}
           {selectedCat !== "all" && (
-            <button onClick={() => setSelectedCat("all")}
-              className="flex items-center gap-1 text-xs text-gray-400 hover:text-gray-600 transition-colors">
+            <button onClick={() => setSelectedCat("all")} className="flex items-center gap-1 text-xs text-gray-400 hover:text-gray-600 transition-colors">
               <X size={11}/> Clear category
             </button>
           )}
         </div>
-
-        {/* Right: Category filter button */}
         <div className="relative">
-          <button
-            onClick={() => setShowCatMenu(s => !s)}
+          <button onClick={() => setShowCatMenu(s => !s)}
             className="flex items-center gap-2 px-4 py-2 bg-white border-2 rounded-xl text-sm font-semibold transition-all shadow-sm"
-            style={{ borderColor: '#48A111', color: '#48A111' }}
-          >
+            style={{ borderColor:'#48A111', color:'#48A111' }}>
             <Tag size={13}/>
-            {selectedCat === "all" ? "Category" : selectedCat}
-            <ChevronDown size={13} className={showCatMenu ? "rotate-180 transition-transform" : "transition-transform"}/>
+            {selectedCat==="all" ? "Category" : selectedCat}
+            <ChevronDown size={13} className={showCatMenu?"rotate-180 transition-transform":"transition-transform"}/>
           </button>
-
           <AnimatePresence>
             {showCatMenu && (
-              <motion.div
-                initial={{ opacity:0, y:5, scale:0.97 }}
-                animate={{ opacity:1, y:0,  scale:1    }}
-                exit={{    opacity:0, y:5,  scale:0.97 }}
-                className="absolute right-0 mt-2 bg-white border border-gray-200 rounded-2xl shadow-xl z-30 py-1.5 min-w-44 overflow-hidden"
-              >
-                {["all", ...allCategories].map(cat => (
-                  <button key={cat}
-                    onClick={() => { setSelectedCat(cat); setShowCatMenu(false); }}
-                    className={`w-full text-left px-4 py-2.5 text-sm font-medium transition-colors
-                      ${selectedCat === cat
-                        ? "font-bold"
-                        : "text-gray-600 hover:bg-gray-50"}`}
-                    style={selectedCat === cat ? { background: '#48A111' + '15', color: '#48A111' } : {}}
-                  >
-                    {cat === "all" ? "All Categories" : cat}
+              <motion.div initial={{ opacity:0, y:5, scale:0.97 }} animate={{ opacity:1, y:0, scale:1 }} exit={{ opacity:0, y:5, scale:0.97 }}
+                className="absolute right-0 mt-2 bg-white border border-gray-200 rounded-2xl shadow-xl z-30 py-1.5 min-w-44 overflow-hidden">
+                {["all",...allCategories].map(cat => (
+                  <button key={cat} onClick={() => { setSelectedCat(cat); setShowCatMenu(false); }}
+                    className={`w-full text-left px-4 py-2.5 text-sm font-medium transition-colors ${selectedCat===cat?"font-bold":"text-gray-600 hover:bg-gray-50"}`}
+                    style={selectedCat===cat?{background:'#48A11115',color:'#48A111'}:{}}>
+                    {cat==="all"?"All Categories":cat}
                   </button>
                 ))}
               </motion.div>
@@ -330,29 +364,32 @@ export default function ProductList() {
       {visible.length === 0 && (
         <motion.div initial={{ opacity:0 }} animate={{ opacity:1 }}
           className="bg-white border border-gray-200 rounded-3xl p-16 text-center shadow-sm">
-          <div className="w-16 h-16 bg-gradient-to-br from-emerald-100 to-teal-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
-            <Package className="text-emerald-500" size={30}/>
+          <div className="w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-4" style={{ background:'#CBF3BB' }}>
+            <Package style={{ color:'#48A111' }} size={30}/>
           </div>
           <h3 className="text-base font-bold text-gray-700 mb-1">
             {search ? `No results for "${search}"` : "No items here"}
           </h3>
-          <p className="text-sm text-gray-400">
-            {search ? "Try a different term." : "Switch filters or add new products."}
-          </p>
+          <p className="text-sm text-gray-400">{search?"Try a different term.":"Switch filters or add new products."}</p>
         </motion.div>
       )}
 
       {/* ── Product Cards ── */}
-      <div className={viewMode === "grid"
-        ? "grid sm:grid-cols-2 lg:grid-cols-3 gap-5"
-        : "flex flex-col gap-4"}>
+      <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-5">
         <AnimatePresence>
           {visible.map((product, idx) => {
-            const bucket  = getProductBucket(product);
-            const cfg     = BUCKET[bucket];
-            const days    = getDaysUntilExpiry(product.expiryDate);
-            const isEdit  = editId === product._id;
-            const BIcon   = cfg.icon;
+            const bucket      = getProductBucket(product);
+            const cfg         = BUCKET[bucket];
+            const days        = getDaysUntilExpiry(product.expiryDate);
+            const isEdit      = editId === product._id;
+            const BIcon       = cfg.icon;
+            const smartStatus = getSmartStatusLabel(product, days, bucket);
+            const unsafeWarn  = getUnsafeWarning(product.category, product.location);
+            const pct         = getFreshnessPct(days, product.category, product.location);
+            const barColor    = getBarColor(pct, bucket);
+            const lblColor    = getBarLabelColor(pct, bucket);
+            const afterExpiry = days < 0 ? getAfterExpiryStatus(product.category, product.location) : null;
+            const threshold   = getNotifyThreshold(product.category, product.location);
 
             return (
               <motion.div key={product._id}
@@ -360,81 +397,61 @@ export default function ProductList() {
                 initial={{ opacity:0, y:24, scale:0.97 }}
                 animate={{ opacity:1, y:0,  scale:1    }}
                 exit={{    opacity:0, y:-16, scale:0.96 }}
-                transition={{ delay: idx * 0.04, type:"spring", stiffness:200, damping:22 }}
-                whileHover={!isEdit ? { y:-5, scale:1.01 } : {}}
-                className={`group relative border-2 overflow-hidden
-                  transition-all duration-300 ease-out
-                  ${cfg.corner} ${cfg.border}
-                  shadow-md hover:shadow-xl ${cfg.glow}
-                  ${isEdit ? `ring-2 ${cfg.ring}` : ""}
-                  ${viewMode === "list" ? "flex" : ""}`}
+                transition={{ delay:idx*0.04, type:"spring", stiffness:200, damping:22 }}
+                whileHover={!isEdit?{ y:-5, scale:1.01 }:{}}
+                className={`group relative border-2 overflow-hidden transition-all duration-300 ease-out
+                  ${cfg.corner} ${cfg.border} shadow-md hover:shadow-xl ${cfg.glow}
+                  ${isEdit?`ring-2 ${cfg.ring}`:""}`}
                 style={{ backgroundColor: cfg.cardBgHex }}
               >
-
-                {/* ── Top gradient stripe (thickness = urgency) ── */}
+                {/* Top stripe — thickness = urgency */}
                 <div className={`bg-gradient-to-r ${cfg.stripe} w-full
-                  ${bucket === "expired"      ? "h-2"   :
-                    bucket === "expiringSoon" ? "h-1.5" : "h-1"}`}
-                />
-
-
+                  ${bucket==="expired"?"h-2":bucket==="expiringSoon"?"h-1.5":"h-1"}`}/>
 
                 <div className="relative p-5 flex-1">
                   {isEdit ? (
-                    /* ── EDIT FORM ── */
+                    /* ── EDIT FORM (unchanged) ── */
                     <div className="space-y-3">
                       <div className="flex items-center justify-between mb-1">
-                        <span className="text-xs font-bold text-emerald-600 flex items-center gap-1.5 uppercase tracking-wide">
+                        <span className="text-xs font-bold flex items-center gap-1.5 uppercase tracking-wide" style={{ color:'#48A111' }}>
                           <Edit2 size={12}/> Edit Product
                         </span>
                         <button onClick={() => setEditId(null)} className="text-gray-300 hover:text-gray-500 transition">
                           <XCircle size={18}/>
                         </button>
                       </div>
-
-                      {[
-                        { label:"Product Name", key:"name", type:"text",   placeholder:"e.g. Organic Milk" },
-                        { label:"Expiry Date",  key:"expiryDate", type:"date", placeholder:"" },
-                      ].map(({ label, key, type, placeholder }) => (
+                      {[{label:"Product Name",key:"name",type:"text",placeholder:"e.g. Organic Milk"},{label:"Expiry Date",key:"expiryDate",type:"date",placeholder:""}].map(({label,key,type,placeholder})=>(
                         <div key={key}>
                           <label className="block text-[11px] font-semibold text-gray-400 uppercase tracking-wide mb-1">{label}</label>
                           <input type={type} value={editData[key]} placeholder={placeholder}
-                            onChange={e => setEditData(d => ({...d, [key]: e.target.value}))}
-                            className="w-full px-3.5 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-800 bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-400/30 focus:border-emerald-400 transition-all"/>
+                            onChange={e=>setEditData(d=>({...d,[key]:e.target.value}))}
+                            className="w-full px-3.5 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-800 bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#48A111]/30 focus:border-[#48A111] transition-all"/>
                         </div>
                       ))}
-
-                      {[
-                        { label:"Category", key:"category", options: CATEGORIES },
-                        { label:"Location",  key:"location", options: LOCATIONS  },
-                      ].map(({ label, key, options }) => (
+                      {[{label:"Category",key:"category",options:CATEGORIES},{label:"Location",key:"location",options:LOCATIONS}].map(({label,key,options})=>(
                         <div key={key}>
                           <label className="block text-[11px] font-semibold text-gray-400 uppercase tracking-wide mb-1">{label}</label>
-                          <select value={editData[key]}
-                            onChange={e => setEditData(d => ({...d, [key]: e.target.value}))}
-                            className="w-full px-3.5 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-800 bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-400/30 focus:border-emerald-400 transition-all">
+                          <select value={editData[key]} onChange={e=>setEditData(d=>({...d,[key]:e.target.value}))}
+                            className="w-full px-3.5 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-800 bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#48A111]/30 focus:border-[#48A111] transition-all">
                             <option value="">Select {label}</option>
-                            {options.map(o => <option key={o} value={o}>{o}</option>)}
+                            {options.map(o=><option key={o} value={o}>{o}</option>)}
                           </select>
                         </div>
                       ))}
-
                       <div>
                         <label className="block text-[11px] font-semibold text-gray-400 uppercase tracking-wide mb-1">Notes</label>
-                        <textarea value={editData.notes} rows={2}
-                          onChange={e => setEditData(d => ({...d, notes: e.target.value}))}
-                          className="w-full px-3.5 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-800 bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-400/30 focus:border-emerald-400 transition-all resize-none"
+                        <textarea value={editData.notes} rows={2} onChange={e=>setEditData(d=>({...d,notes:e.target.value}))}
+                          className="w-full px-3.5 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-800 bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#48A111]/30 focus:border-[#48A111] transition-all resize-none"
                           placeholder="Optional notes…"/>
                       </div>
-
                       <div className="flex gap-2 pt-1">
-                        <button onClick={saveEdit} disabled={editLoading || !editData.name}
-                          className="flex-1 flex items-center justify-center gap-2 py-2.5 text-white rounded-xl text-sm font-bold disabled:opacity-50 transition-all shadow-sm" style={{ background: "linear-gradient(to right, #48A111, #3a8a0d)" }}>
-                          {editLoading ? <RefreshCw size={14} className="animate-spin"/> : <Save size={14}/>}
+                        <button onClick={saveEdit} disabled={editLoading||!editData.name}
+                          className="flex-1 flex items-center justify-center gap-2 py-2.5 text-white rounded-xl text-sm font-bold disabled:opacity-50 transition-all shadow-sm"
+                          style={{ background:"linear-gradient(to right, #48A111, #3a8a0d)" }}>
+                          {editLoading?<RefreshCw size={14} className="animate-spin"/>:<Save size={14}/>}
                           Save Changes
                         </button>
-                        <button onClick={() => setEditId(null)}
-                          className="px-4 py-2.5 border border-gray-200 text-gray-500 rounded-xl text-sm font-medium hover:bg-gray-50 transition-all">
+                        <button onClick={()=>setEditId(null)} className="px-4 py-2.5 border border-gray-200 text-gray-500 rounded-xl text-sm font-medium hover:bg-gray-50 transition-all">
                           Cancel
                         </button>
                       </div>
@@ -442,10 +459,18 @@ export default function ProductList() {
                   ) : (
                     /* ── PRODUCT VIEW ── */
                     <>
+                      {/* ── Unsafe storage warning ── */}
+                      {unsafeWarn && (
+                        <div className="mb-3 px-3 py-2 rounded-xl border flex items-start gap-2 text-xs font-semibold"
+                          style={{ background:'#FFF1F2', borderColor:'#FECACA', color:'#BE123C' }}>
+                          <AlertOctagon size={13} className="shrink-0 mt-0.5"/>
+                          {unsafeWarn.msg}
+                        </div>
+                      )}
+
                       {/* Header row */}
                       <div className="flex items-start justify-between gap-3 mb-4">
                         <div className="flex items-center gap-3 min-w-0">
-                          {/* Category icon pill */}
                           <div className={`shrink-0 w-10 h-10 rounded-xl flex items-center justify-center bg-gradient-to-br ${cfg.stripe} shadow-sm`}>
                             <BIcon size={18} className="text-white"/>
                           </div>
@@ -456,15 +481,11 @@ export default function ProductList() {
                             </span>
                           </div>
                         </div>
-
-                        {/* Status badge */}
-                        <span className={`shrink-0 text-[11px] font-bold px-2.5 py-1 rounded-full border flex items-center gap-1 ${cfg.badge}`}>
-                          <BIcon size={10}/>
-                          {bucket === "expiringSoon" && days >= 0
-                            ? `${days}d left`
-                            : bucket === "expired"
-                            ? `${Math.abs(days)}d ago`
-                            : cfg.label}
+                        {/* Smart status badge */}
+                        <span className="shrink-0 text-[11px] font-bold px-2.5 py-1 rounded-full border flex items-center gap-1"
+                          style={{ background:`${smartStatus.color}15`, color:smartStatus.color, borderColor:`${smartStatus.color}30` }}>
+                          <smartStatus.icon size={10}/>
+                          {smartStatus.label}
                         </span>
                       </div>
 
@@ -475,16 +496,16 @@ export default function ProductList() {
                             <Calendar size={13} className="text-black"/>
                           </div>
                           <span className="font-black text-black underline underline-offset-2 decoration-black/40">
-                            {new Date(product.expiryDate).toLocaleDateString("en-US", {
-                              weekday:"short", month:"short", day:"numeric", year:"numeric"
-                            })}
+                            {new Date(product.expiryDate).toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric",year:"numeric"})}
                           </span>
                         </div>
                         <div className="flex items-center gap-2.5 text-sm">
                           <div className="w-7 h-7 rounded-lg bg-gray-100 flex items-center justify-center shrink-0">
                             <MapPin size={13} className="text-black"/>
                           </div>
-                          <span className="font-black text-black underline underline-offset-2 decoration-black/40">{product.location || "—"}</span>
+                          <span className="font-black text-black underline underline-offset-2 decoration-black/40">
+                            {product.location || "—"}
+                          </span>
                         </div>
                         {product.notes && (
                           <div className="flex items-start gap-2.5 text-sm">
@@ -496,49 +517,47 @@ export default function ProductList() {
                         )}
                       </div>
 
-                      {/* Freshness bar — shown for ALL active items */}
-                      {product.status === "active" && days >= 0 && (() => {
-                        // Cap at 180 days for percentage calc so long-shelf items still show meaningful bar
-                        const maxDays = 180;
-                        const pct     = Math.min(Math.round((days / maxDays) * 100), 100);
-                        // Colour zones based on percentage
-                        const barColor =
-                          pct <= 10  ? "from-red-500 to-red-600"           :  // critical — red
-                          pct <= 20  ? "from-orange-400 to-red-400"        :  // bad — orange-red
-                          pct <= 30  ? "from-orange-300 to-orange-400"     :  // warning — mild orange
-                          pct <= 50  ? "from-amber-300 to-amber-400"       :  // caution — mild amber
-                          pct <= 70  ? "from-lime-400 to-green-400"        :  // ok — yellow-green
-                          pct <= 85  ? "from-[#5cc118] to-[#48A111]"     :  // good — green
-                                       "from-[#48A111] to-[#3a8a0d]";        // excellent — deep green
-                        const labelColor =
-                          pct <= 10  ? "text-red-600"    :
-                          pct <= 30  ? "text-orange-600" :
-                          pct <= 50  ? "text-amber-600"  :
-                                       "text-[#48A111]";
-                        return (
-                          <div className="mb-4">
-                            <div className="flex justify-between text-[11px] font-semibold mb-1.5">
-                              <span className="font-bold text-black">Freshness</span>
-                              <span className={labelColor}>{pct}%</span>
-                            </div>
-                            <div className="h-2 bg-gray-200/70 rounded-full overflow-hidden">
-                              <motion.div
-                                initial={{ width:0 }}
-                                animate={{ width:`${Math.max(2, pct)}%` }}
-                                transition={{ duration:0.9, ease:"easeOut" }}
-                                className={`h-full rounded-full bg-gradient-to-r ${barColor}`}/>
-                            </div>
-                          </div>
-                        );
-                      })()}
+                      {/* Smart context message */}
+                      {product.status === "active" && days >= 0 && (
+                        <div className="mb-3 px-3 py-1.5 rounded-lg text-[11px] font-medium text-gray-500 bg-white/60 border border-gray-200/60">
+                          {bucket === "expiringSoon"
+                            ? `Based on ${product.location||"storage"}, use within ${days} day${days!==1?"s":""}`
+                            : `Based on ${product.location||"storage"}, safe for ~${Math.max(0, days - threshold)} more days after threshold`
+                          }
+                        </div>
+                      )}
 
-                      {/* Expired alert strip */}
-                      {bucket === "expired" && (
-                        <div className="mb-4 flex items-center gap-2 px-3 py-2 bg-rose-50 border border-rose-200 rounded-xl">
-                          <AlertOctagon size={14} className="text-rose-500 shrink-0"/>
-                          <span className="text-xs font-semibold text-rose-700">
-                            Expired {Math.abs(days)} {Math.abs(days)===1 ? "day" : "days"} ago
-                          </span>
+                      {/* After-expiry smart message */}
+                      {afterExpiry && (
+                        <div className="mb-3 px-3 py-2 rounded-xl border flex items-start gap-2 text-xs font-semibold"
+                          style={{
+                            background: afterExpiry==="risky"?"#FFF1F2":afterExpiry==="quality_reduce"?"#F5F3FF":"#FFFBEB",
+                            borderColor:afterExpiry==="risky"?"#FECACA":afterExpiry==="quality_reduce"?"#DDD6FE":"#FDE68A",
+                            color:      afterExpiry==="risky"?"#BE123C":afterExpiry==="quality_reduce"?"#6D28D9":"#92400E",
+                          }}>
+                          <Info size={13} className="shrink-0 mt-0.5"/>
+                          {afterExpiry==="risky"          ? `${product.category} past expiry — not recommended. Discard if unsure.` :
+                           afterExpiry==="quality_reduce" ? "Frozen past expiry — still safe but quality may have reduced." :
+                           afterExpiry==="probably_safe"  ? `${product.category} may still be okay — check for spoilage before consuming.` :
+                                                            "Check for spoilage (smell/look) before consuming."}
+                        </div>
+                      )}
+
+                      {/* ── Freshness bar — ALL active items ── */}
+                      {product.status === "active" && days >= 0 && (
+                        <div className="mb-4">
+                          <div className="flex justify-between text-[11px] font-semibold mb-1.5">
+                            <span className="font-bold text-black">Freshness</span>
+                            <span style={{ color: lblColor }}>{pct}%</span>
+                          </div>
+                          <div className="h-2 bg-gray-200/70 rounded-full overflow-hidden">
+                            <motion.div
+                              initial={{ width:0 }}
+                              animate={{ width:`${Math.max(2, pct)}%` }}
+                              transition={{ duration:0.9, ease:"easeOut" }}
+                              className="h-full rounded-full"
+                              style={{ background: barColor }}/>
+                          </div>
                         </div>
                       )}
 
@@ -547,11 +566,11 @@ export default function ProductList() {
                         {product.status === "active" && (
                           <motion.button whileTap={{ scale:0.95 }}
                             onClick={() => updateStatus(product._id, "used")}
-                            className="flex items-center gap-1.5 text-xs font-bold text-white px-3.5 py-2 rounded-xl transition-all shadow-sm" style={{ background: "linear-gradient(to right, #48A111, #3a8a0d)" }}>
+                            className="flex items-center gap-1.5 text-xs font-bold text-white px-3.5 py-2 rounded-xl transition-all shadow-sm"
+                            style={{ background:"linear-gradient(to right, #48A111, #3a8a0d)" }}>
                             <CheckCircle size={13}/> Used
                           </motion.button>
                         )}
-
                         {product.status !== "active" && (
                           <motion.button whileTap={{ scale:0.95 }}
                             onClick={() => updateStatus(product._id, "active")}
@@ -559,18 +578,16 @@ export default function ProductList() {
                             <RotateCcw size={13}/> Restore
                           </motion.button>
                         )}
-
                         <motion.button whileTap={{ scale:0.95 }}
                           onClick={() => startEdit(product)}
                           className="flex items-center gap-1.5 text-xs font-bold text-white px-3.5 py-2 rounded-xl transition-all shadow-sm"
-                          style={{ backgroundColor: '#111111' }}>
+                          style={{ backgroundColor:'#111111' }}>
                           <Edit2 size={13} color="white"/> Edit
                         </motion.button>
-
                         <motion.button whileTap={{ scale:0.95 }}
                           onClick={() => deleteProduct(product._id)}
                           className="flex items-center gap-1.5 text-xs font-bold bg-white px-3.5 py-2 rounded-xl transition-all ml-auto"
-                          style={{ border: '2px solid #FF0000', color: '#FF0000' }}>
+                          style={{ border:'2px solid #FF0000', color:'#FF0000' }}>
                           <Trash2 size={13} color="#FF0000"/> Delete
                         </motion.button>
                       </div>
