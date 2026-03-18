@@ -6,171 +6,183 @@ import { motion, AnimatePresence } from 'framer-motion';
 import {
   Camera, X, Calendar, Tag, MapPin, FileText, Package,
   Leaf, Wine, Snowflake, AlertCircle, CheckCircle, Loader,
-  ChevronRight, Sparkles, RotateCcw, Trash2, Plus,
+  ChevronRight, ChevronDown, RotateCcw, Trash2, Plus,
   Home, Refrigerator, Apple, Beef, Milk, Sandwich,
   ScanLine, Wand2, Zap,
 } from 'lucide-react';
 
-// ── Load Puter.js from CDN (free AI vision — no API key, no backend, no cost) ─
-// Puter uses "User-Pays" model: users authenticate with their free Puter account
-// Developer pays nothing. Works directly in the browser.
+// ── Theme colours ─────────────────────────────────────────────────────────────
+const G  = '#48A111';   // primary green
+const GD = '#41950F';   // darker green (replaces #059669)
+const BG = '#DBE4C9';   // page background
+
+// ── Puter AI ──────────────────────────────────────────────────────────────────
 function loadPuter() {
   return new Promise((resolve, reject) => {
     if (window.puter) { resolve(window.puter); return; }
     const s = document.createElement('script');
     s.src = 'https://js.puter.com/v2/';
     s.onload = () => {
-      // puter.js attaches itself to window.puter after load
       const wait = (n) => {
         if (window.puter) resolve(window.puter);
         else if (n <= 0) reject(new Error('puter.js failed to initialise'));
         else setTimeout(() => wait(n - 1), 100);
       };
-      wait(30); // wait up to 3 seconds
+      wait(30);
     };
     s.onerror = () => reject(new Error('Failed to load puter.js script'));
     document.head.appendChild(s);
   });
 }
 
-// ── Send base64 image to Puter AI (gpt-4o vision) and extract expiry date ────
 async function analyseWithPuter(dataUrl) {
   const puter = await loadPuter();
-
-  // Puter's ai.chat accepts an image URL or a data URL directly as second arg
-  // We use gpt-4o which has excellent vision / OCR ability
   const prompt = `You are reading a food product label. Find the expiry date, best before date, or use by date.
-
-IMPORTANT: Reply with ONLY a raw JSON object — no markdown, no explanation, no code fences.
-
-If you find a date:
-{"found": true, "date": "YYYY-MM-DD", "display": "exact text from label", "confidence": "high|medium|low"}
-
-If no date visible:
-{"found": false}
-
-Rules:
-- "JUL 2026" or "07/2026" → last day of month → "2026-07-31"
-- "NOV 2025" → "2025-11-30"
-- "31/07/2026" or "31-07-2026" → "2026-07-31"
-- "12/25" → "2025-12-31"
-- Look for labels: Use By, Best Before, Expiry, Exp, BB, BBE, Use Before, Best By, Mfg+shelf life`;
-
-  const response = await puter.ai.chat(prompt, dataUrl, {
-    model: 'gpt-4o',
-  });
-
-  // Response can be a string or object depending on puter version
+Reply with ONLY a raw JSON object — no markdown, no explanation, no code fences.
+If date found: {"found": true, "date": "YYYY-MM-DD", "display": "exact text from label", "confidence": "high|medium|low"}
+If no date: {"found": false}
+Rules: "JUL 2026" → "2026-07-31", "NOV 2025" → "2025-11-30", "31/07/2026" → "2026-07-31"`;
+  const response = await puter.ai.chat(prompt, dataUrl, { model: 'gpt-4o' });
   const raw = (typeof response === 'string' ? response : response?.message?.content || response?.toString() || '').trim();
-  console.log('[Puter AI] raw response:', raw);
-
   const clean = raw.replace(/```json\s*/gi, '').replace(/```/g, '').trim();
-  const result = JSON.parse(clean);
-  return result;
+  return JSON.parse(clean);
 }
 
-// ─── Component ────────────────────────────────────────────────────────────────
-function AddProduct() {
-  const [formData, setFormData] = useState({
-    name: '', category: '', expiryDate: '', location: '', notes: '',
-  });
-  const [loading, setLoading]   = useState(false);
-  const [message, setMessage]   = useState({ type: '', text: '' });
+// ── Data ──────────────────────────────────────────────────────────────────────
+const CATEGORIES = [
+  { id:'dairy',      label:'Dairy',      icon:Milk,      bg:'#EFF6FF', color:'#2563EB' },
+  { id:'vegetables', label:'Vegetables', icon:Leaf,      bg:'#F0FDF4', color:'#16A34A' },
+  { id:'fruits',     label:'Fruits',     icon:Apple,     bg:'#DCFCE7', color:'#15803D' },
+  { id:'meat',       label:'Meat',       icon:Beef,      bg:'#FFF1F2', color:'#E11D48' },
+  { id:'grains',     label:'Grains',     icon:Package,   bg:'#FFFBEB', color:'#D97706' },
+  { id:'beverages',  label:'Beverages',  icon:Wine,      bg:'#FAF5FF', color:'#7C3AED' },
+  { id:'snacks',     label:'Snacks',     icon:Sandwich,  bg:'#FFF7ED', color:'#EA580C' },
+  { id:'frozen',     label:'Frozen',     icon:Snowflake, bg:'#ECFEFF', color:'#0891B2' },
+  { id:'other',      label:'Other',      icon:Package,   bg:'#F9FAFB', color:'#6B7280' },
+];
 
-  // Camera / AI state
-  const [showCamera, setShowCamera]       = useState(false);
+const LOCATIONS = [
+  { id:'pantry',       label:'Pantry',       icon:Home,         bg:'#FFFBEB', color:'#B45309' },
+  { id:'refrigerator', label:'Refrigerator', icon:Refrigerator, bg:'#EFF6FF', color:'#1D4ED8' },
+  { id:'freezer',      label:'Freezer',      icon:Snowflake,    bg:'#ECFEFF', color:'#0E7490' },
+  { id:'cabinet',      label:'Cabinet',      icon:Package,      bg:'#F9FAFB', color:'#374151' },
+  { id:'other',        label:'Other',        icon:MapPin,       bg:'#F9FAFB', color:'#6B7280' },
+];
+
+// ── Accordion section wrapper ─────────────────────────────────────────────────
+function Section({ title, icon: Icon, open, onToggle, badge, children }) {
+  return (
+    <div className="rounded-2xl overflow-hidden border-2 transition-all"
+      style={{ borderColor: open ? G : '#E2E8E0', background:'white' }}>
+      <button
+        type="button"
+        onClick={onToggle}
+        className="w-full flex items-center justify-between px-5 py-4 text-left transition-colors"
+        style={{ background: open ? `${G}0D` : 'white' }}
+      >
+        <div className="flex items-center gap-3">
+          <div className="w-9 h-9 rounded-xl flex items-center justify-center"
+            style={{ background: open ? `${G}20` : '#F3F4F6' }}>
+            <Icon size={18} style={{ color: open ? G : '#6B7280' }}/>
+          </div>
+          <div>
+            <span className="text-sm font-bold text-gray-800">{title}</span>
+            {badge && (
+              <span className="ml-2 text-xs font-semibold px-2 py-0.5 rounded-full"
+                style={{ background:`${G}20`, color: G }}>
+                {badge}
+              </span>
+            )}
+          </div>
+        </div>
+        <ChevronDown
+          size={18}
+          className="transition-transform duration-300"
+          style={{ color: G, transform: open ? 'rotate(180deg)' : 'rotate(0deg)' }}
+        />
+      </button>
+      <AnimatePresence initial={false}>
+        {open && (
+          <motion.div
+            key="content"
+            initial={{ height:0, opacity:0 }}
+            animate={{ height:'auto', opacity:1 }}
+            exit={{ height:0, opacity:0 }}
+            transition={{ duration:0.25, ease:'easeInOut' }}
+            style={{ overflow:'hidden' }}
+          >
+            <div className="px-5 pb-5 pt-1 border-t border-gray-100">
+              {children}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+// ── Main Component ────────────────────────────────────────────────────────────
+export default function AddProduct() {
+  const [formData, setFormData] = useState({
+    name:'', category:'', expiryDate:'', location:'', notes:'',
+  });
+  const [loading,       setLoading]       = useState(false);
+  const [message,       setMessage]       = useState({ type:'', text:'' });
+  const [showCamera,    setShowCamera]    = useState(false);
   const [capturedImage, setCapturedImage] = useState(null);
-  const [aiLoading, setAiLoading]         = useState(false);
-  const [aiStatus, setAiStatus]           = useState(''); // status text during loading
-  const [scanResult, setScanResult]       = useState(null);
-  const [activeStep, setActiveStep]       = useState(1);
+  const [aiLoading,     setAiLoading]     = useState(false);
+  const [aiStatus,      setAiStatus]      = useState('');
+  const [scanResult,    setScanResult]    = useState(null);
+
+  // Accordion open states
+  const [scanOpen,     setScanOpen]     = useState(false);
+  const [categoryOpen, setCategoryOpen] = useState(false);
+  const [locationOpen, setLocationOpen] = useState(false);
 
   const webcamRef = useRef(null);
   const navigate  = useNavigate();
 
-  // Pre-load puter.js in background so it's ready when user clicks Scan
-  useEffect(() => {
-    loadPuter().catch(() => {}); // silent pre-load
-  }, []);
+  useEffect(() => { loadPuter().catch(() => {}); }, []);
 
-  const categories = [
-    { id:'dairy',      label:'Dairy',      icon:Milk,      bgColor:'bg-blue-50',    textColor:'text-blue-600'    },
-    { id:'vegetables', label:'Vegetables', icon:Leaf,      bgColor:'bg-emerald-50', textColor:'text-emerald-600' },
-    { id:'fruits',     label:'Fruits',     icon:Apple,     bgColor:'bg-green-50',   textColor:'text-green-600'   },
-    { id:'meat',       label:'Meat',       icon:Beef,      bgColor:'bg-rose-50',    textColor:'text-rose-600'    },
-    { id:'grains',     label:'Grains',     icon:Package,   bgColor:'bg-amber-50',   textColor:'text-amber-600'   },
-    { id:'beverages',  label:'Beverages',  icon:Wine,      bgColor:'bg-purple-50',  textColor:'text-purple-600'  },
-    { id:'snacks',     label:'Snacks',     icon:Sandwich,  bgColor:'bg-orange-50',  textColor:'text-orange-600'  },
-    { id:'frozen',     label:'Frozen',     icon:Snowflake, bgColor:'bg-cyan-50',    textColor:'text-cyan-600'    },
-    { id:'other',      label:'Other',      icon:Package,   bgColor:'bg-gray-50',    textColor:'text-gray-600'    },
-  ];
-
-  const locations = [
-    { id:'pantry',       label:'Pantry',       icon:Home,         color:'amber' },
-    { id:'refrigerator', label:'Refrigerator', icon:Refrigerator, color:'blue'  },
-    { id:'freezer',      label:'Freezer',      icon:Snowflake,    color:'cyan'  },
-    { id:'cabinet',      label:'Cabinet',      icon:Package,      color:'gray'  },
-    { id:'other',        label:'Other',        icon:MapPin,       color:'gray'  },
-  ];
-
-  // ── camera ─────────────────────────────────────────────────────────────────
+  // ── Camera ─────────────────────────────────────────────────────────────────
   const openCamera = () => {
     setCapturedImage(null); setScanResult(null);
-    setMessage({ type:'', text:'' }); setShowCamera(true); setActiveStep(1);
+    setMessage({ type:'', text:'' }); setShowCamera(true);
   };
 
   const capture = useCallback(() => {
     const img = webcamRef.current.getScreenshot({ width:1280, height:720 });
-    setCapturedImage(img); setShowCamera(false); setActiveStep(2);
+    setCapturedImage(img); setShowCamera(false);
   }, [webcamRef]);
 
-  const retake  = () => { setCapturedImage(null); setScanResult(null); setShowCamera(true); setActiveStep(1); };
-  const discard = () => { setCapturedImage(null); setScanResult(null); setActiveStep(1); };
+  const retake  = () => { setCapturedImage(null); setScanResult(null); setShowCamera(true); };
+  const discard = () => { setCapturedImage(null); setScanResult(null); setShowCamera(false); };
 
-  // ── AI analysis via Puter ──────────────────────────────────────────────────
+  // ── AI ─────────────────────────────────────────────────────────────────────
   const analyseImage = async () => {
     if (!capturedImage) return;
-    setAiLoading(true);
-    setScanResult(null);
-    setMessage({ type:'', text:'' });
-    setAiStatus('Loading AI…');
-
+    setAiLoading(true); setScanResult(null);
+    setMessage({ type:'', text:'' }); setAiStatus('Connecting to AI…');
     try {
-      setAiStatus('Connecting to Puter AI…');
       const result = await analyseWithPuter(capturedImage);
-      console.log('[Puter AI] parsed result:', result);
-
       setScanResult(result);
-
       if (result.found && result.date) {
         setFormData(prev => ({ ...prev, expiryDate: result.date }));
-        const dt = new Date(result.date + 'T00:00:00');
-        const display = dt.toLocaleDateString('en-US', { year:'numeric', month:'long', day:'numeric' });
-        setMessage({ type:'success', text:`✅ Expiry date found: ${result.display || display} — auto-filled below.` });
+        const display = new Date(result.date+'T00:00:00').toLocaleDateString('en-US',{year:'numeric',month:'long',day:'numeric'});
+        setMessage({ type:'success', text:`Expiry date found: ${result.display || display} — filled below.` });
       } else {
-        setMessage({ type:'info', text:'No expiry date detected. Please enter it manually below, or retake a clearer photo.' });
+        setMessage({ type:'info', text:'No date detected. Please enter the expiry date manually below.' });
       }
-      setActiveStep(3);
     } catch (err) {
-      console.error('[Puter AI] error:', err);
-      // If puter requires sign-in, it will throw — show helpful message
-      let errText = 'AI analysis failed. Please enter the date manually.';
-      if (err.message?.includes('puter') || err.message?.includes('auth') || err.message?.includes('sign')) {
-        errText = 'Puter AI requires a free sign-in. A login popup may appear — sign in once and try again.';
-      } else if (err.message?.includes('Failed to load')) {
-        errText = 'Could not load Puter AI (check internet connection). Enter the date manually.';
-      } else if (err.message) {
-        errText = `AI error: ${err.message}`;
-      }
-      setMessage({ type:'error', text: errText });
-      setActiveStep(3);
-    } finally {
-      setAiLoading(false);
-      setAiStatus('');
-    }
+      let txt = 'AI analysis failed. Please enter the date manually.';
+      if (err.message?.includes('sign') || err.message?.includes('auth')) txt = 'Puter AI needs a free sign-in. A login popup may appear — sign in once and retry.';
+      else if (err.message?.includes('Failed to load')) txt = 'Could not connect to AI. Check your internet and retry.';
+      else if (err.message) txt = `Error: ${err.message}`;
+      setMessage({ type:'error', text: txt });
+    } finally { setAiLoading(false); setAiStatus(''); }
   };
 
-  // ── form ───────────────────────────────────────────────────────────────────
+  // ── Form ───────────────────────────────────────────────────────────────────
   const handleChange = e => setFormData(prev => ({ ...prev, [e.target.name]: e.target.value }));
 
   const handleSubmit = async e => {
@@ -180,425 +192,350 @@ function AddProduct() {
     try {
       await axios.post('/api/products', formData);
       setMessage({ type:'success', text:'Product added successfully!' });
-      setTimeout(() => navigate('/dashboard'), 2000);
+      setTimeout(() => navigate('/dashboard'), 1800);
     } catch (err) {
-      setMessage({ type:'error', text:'Error: ' + (err.response?.data?.message || 'Unknown error') });
+      setMessage({ type:'error', text:'Error: '+(err.response?.data?.message||'Unknown error') });
     } finally { setLoading(false); }
   };
 
-  const confidenceColor = c =>
-    c === 'high'   ? 'bg-emerald-100 text-emerald-700 border-emerald-200' :
-    c === 'medium' ? 'bg-amber-100 text-amber-700 border-amber-200' :
-                     'bg-gray-100 text-gray-600 border-gray-200';
-
-  // ── render ─────────────────────────────────────────────────────────────────
+  // ── Render ─────────────────────────────────────────────────────────────────
   return (
-    <div className="max-w-4xl mx-auto">
+    <div className="max-w-2xl mx-auto pb-10" style={{ fontFamily:"'DM Sans', sans-serif" }}>
 
-      {/* Header */}
-      <motion.div initial={{ opacity:0, y:-20 }} animate={{ opacity:1, y:0 }} className="mb-8">
-        <h1 className="text-3xl font-bold text-gray-800 flex items-center gap-3">
-          <div className="p-2 bg-gradient-to-br from-emerald-400 to-emerald-600 rounded-xl shadow-lg shadow-emerald-500/20">
-            <Package className="text-white" size={24}/>
-          </div>
-          Add New Product
-        </h1>
-        <p className="text-gray-500 mt-2 ml-14 flex items-center gap-2">
-          Scan the expiry date — AI reads it automatically
-          <span className="inline-flex items-center gap-1 text-xs bg-emerald-100 text-emerald-700 font-medium px-2 py-0.5 rounded-full border border-emerald-200">
-            <Zap size={10}/> Powered by Puter AI · Free
-          </span>
-        </p>
-      </motion.div>
-
-      {/* Progress Steps */}
+      {/* ── Page header ── */}
       <div className="mb-8">
-        <div className="flex items-center justify-between">
-          {[1,2,3].map(step => (
-            <div key={step} className="flex items-center flex-1">
-              <motion.div
-                animate={{
-                  scale: activeStep >= step ? 1 : 0.85,
-                  backgroundColor: activeStep > step ? '#10b981' : activeStep === step ? '#059669' : '#e5e7eb',
-                }}
-                className="w-10 h-10 rounded-full flex items-center justify-center text-white font-semibold shadow-sm"
-              >
-                {activeStep > step ? <CheckCircle size={20}/> : <span>{step}</span>}
-              </motion.div>
-              {step < 3 && (
-                <div className="flex-1 h-1 mx-2 bg-gray-200 rounded overflow-hidden">
-                  <motion.div
-                    animate={{ width: activeStep > step ? '100%' : '0%' }}
-                    transition={{ duration:0.4 }}
-                    className="h-full bg-emerald-500 rounded"
-                  />
-                </div>
-              )}
-            </div>
-          ))}
-        </div>
-        <div className="flex justify-between mt-2 text-sm text-gray-500 px-1">
-          <span>Capture</span><span>AI Scan</span><span>Details</span>
+        <div className="flex items-center gap-3 mb-1">
+          <div className="w-10 h-10 rounded-2xl flex items-center justify-center shadow-md"
+            style={{ background:`linear-gradient(135deg, ${G}, ${GD})` }}>
+            <Plus size={20} className="text-white"/>
+          </div>
+          <div>
+            <h1 className="text-2xl font-black tracking-tight" style={{ color:'#1A2E1A' }}>
+              Add New Product
+            </h1>
+            <p className="text-xs font-medium text-gray-500 mt-0.5">
+              Fill in the details below to track this item
+            </p>
+          </div>
         </div>
       </div>
 
-      {/* Message Alert */}
+      {/* ── Alert message ── */}
       <AnimatePresence>
         {message.text && (
           <motion.div
-            initial={{ opacity:0, y:-10 }} animate={{ opacity:1, y:0 }} exit={{ opacity:0, y:-10 }}
-            className={`mb-6 p-4 rounded-xl border flex items-start gap-3 ${
-              message.type==='success' ? 'bg-emerald-50 border-emerald-200 text-emerald-700' :
-              message.type==='error'   ? 'bg-rose-50 border-rose-200 text-rose-700' :
-                                         'bg-blue-50 border-blue-200 text-blue-700'
-            }`}
+            initial={{ opacity:0, y:-8 }} animate={{ opacity:1, y:0 }} exit={{ opacity:0, y:-8 }}
+            className="mb-5 px-4 py-3 rounded-2xl border flex items-start gap-3 text-sm font-medium"
+            style={{
+              background: message.type==='success' ? '#F0FDF4' : message.type==='error' ? '#FFF1F2' : '#EFF6FF',
+              borderColor: message.type==='success' ? '#BBF7D0' : message.type==='error' ? '#FECDD3' : '#BFDBFE',
+              color: message.type==='success' ? '#15803D' : message.type==='error' ? '#BE123C' : '#1D4ED8',
+            }}
           >
-            {message.type==='success' ? <CheckCircle size={20} className="shrink-0 mt-0.5"/> :
-             message.type==='error'   ? <AlertCircle size={20} className="shrink-0 mt-0.5"/> :
-                                        <Sparkles   size={20} className="shrink-0 mt-0.5"/>}
-            <p className="text-sm">{message.text}</p>
+            {message.type==='success' ? <CheckCircle size={18} className="shrink-0 mt-0.5"/> :
+             message.type==='error'   ? <AlertCircle size={18} className="shrink-0 mt-0.5"/> :
+                                        <Wand2       size={18} className="shrink-0 mt-0.5"/>}
+            {message.text}
           </motion.div>
         )}
       </AnimatePresence>
 
-      {/* ── AI Scanner Card ── */}
-      <motion.div
-        initial={{ opacity:0, y:20 }} animate={{ opacity:1, y:0 }}
-        className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden mb-6"
-      >
-        <div className="p-6">
-          {/* Card header */}
-          <div className="flex items-start justify-between mb-4">
-            <div>
-              <h2 className="text-lg font-semibold text-gray-800 flex items-center gap-2">
-                <Wand2 className="text-emerald-600" size={20}/>
-                AI Expiry Scanner
-              </h2>
-              <p className="text-xs text-gray-400 mt-0.5">
-                Uses Puter.js · free GPT-4o vision · no API key needed
-              </p>
-            </div>
-            <span className="flex items-center gap-1 text-xs font-semibold px-2.5 py-1 bg-emerald-50 text-emerald-600 border border-emerald-200 rounded-full">
-              <Zap size={11}/> FREE
-            </span>
-          </div>
+      <div className="space-y-4">
 
-          {/* Idle */}
+        {/* ── 1. Product Name (always visible) ── */}
+        <div className="rounded-2xl border-2 bg-white p-5 transition-all"
+          style={{ borderColor: formData.name ? G : '#E2E8E0' }}>
+          <label className="flex items-center gap-2 text-sm font-bold text-gray-700 mb-3">
+            <div className="w-7 h-7 rounded-lg flex items-center justify-center" style={{ background:`${G}20` }}>
+              <Package size={14} style={{ color: G }}/>
+            </div>
+            Product Name
+            <span style={{ color:'#EF4444' }}>*</span>
+          </label>
+          <input
+            type="text" name="name" value={formData.name} onChange={handleChange}
+            placeholder="e.g., Organic Milk, Fresh Apples, Turmeric…"
+            className="w-full px-4 py-3 rounded-xl border-2 text-sm font-medium text-gray-800 placeholder-gray-400 outline-none transition-all"
+            style={{
+              borderColor: formData.name ? G : '#E5E7EB',
+              background: formData.name ? `${G}08` : '#FAFAFA',
+            }}
+          />
+        </div>
+
+        {/* ── 2. AI Expiry Scanner (accordion) ── */}
+        <Section
+          title="AI Expiry Scanner"
+          icon={Wand2}
+          open={scanOpen}
+          onToggle={() => setScanOpen(s => !s)}
+          badge={formData.expiryDate ? "Date set ✓" : null}
+        >
+          {/* Idle state */}
           {!showCamera && !capturedImage && (
-            <motion.div
-              whileHover={{ scale:1.01 }} onClick={openCamera}
-              className="border-2 border-dashed border-gray-200 hover:border-emerald-300 rounded-xl p-10 text-center cursor-pointer transition-colors group"
-            >
-              <div className="w-20 h-20 bg-gradient-to-br from-emerald-50 to-emerald-100 group-hover:from-emerald-100 group-hover:to-emerald-200 rounded-full flex items-center justify-center mx-auto mb-4 transition-colors shadow-inner">
-                <ScanLine className="text-emerald-500" size={36}/>
+            <div className="text-center py-4">
+              <div className="w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-3"
+                style={{ background:`${G}15` }}>
+                <ScanLine size={30} style={{ color: G }}/>
               </div>
-              <h3 className="font-semibold text-gray-800 mb-1">Scan Expiry Date</h3>
-              <p className="text-sm text-gray-500 mb-5 max-w-xs mx-auto">
-                Take a photo of the expiry / best before date — AI reads and fills it automatically
+              <p className="text-sm text-gray-500 mb-4 max-w-xs mx-auto">
+                Take a photo of the expiry date — AI reads it and fills the field automatically
               </p>
-              <button type="button"
-                className="px-6 py-2.5 bg-emerald-600 text-white rounded-lg text-sm font-medium hover:bg-emerald-700 transition-colors inline-flex items-center gap-2 shadow-sm">
+              <button type="button" onClick={openCamera}
+                className="inline-flex items-center gap-2 px-6 py-2.5 rounded-xl text-sm font-bold text-white shadow-md transition-all hover:opacity-90 active:scale-95"
+                style={{ background:`linear-gradient(135deg, ${G}, ${GD})` }}>
                 <Camera size={16}/> Open Camera
               </button>
-            </motion.div>
+            </div>
           )}
 
           {/* Live camera */}
           {showCamera && (
             <div className="space-y-3">
               <div className="relative rounded-xl overflow-hidden bg-gray-900">
-                <Webcam
-                  audio={false} ref={webcamRef}
+                <Webcam audio={false} ref={webcamRef}
                   screenshotFormat="image/jpeg" screenshotQuality={0.95}
                   videoConstraints={{ width:1280, height:720, facingMode:'environment' }}
-                  className="w-full h-auto"
-                />
-                {/* Guide frame */}
+                  className="w-full h-auto"/>
                 <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                  <div className="relative w-72 h-28">
-                    <div className="absolute top-0 left-0 w-8 h-8 border-t-4 border-l-4 border-emerald-400 rounded-tl-lg"/>
-                    <div className="absolute top-0 right-0 w-8 h-8 border-t-4 border-r-4 border-emerald-400 rounded-tr-lg"/>
-                    <div className="absolute bottom-0 left-0 w-8 h-8 border-b-4 border-l-4 border-emerald-400 rounded-bl-lg"/>
-                    <div className="absolute bottom-0 right-0 w-8 h-8 border-b-4 border-r-4 border-emerald-400 rounded-br-lg"/>
-                    <motion.div
-                      animate={{ top:['8%','82%','8%'] }}
-                      transition={{ duration:2, repeat:Infinity, ease:'easeInOut' }}
-                      style={{ position:'absolute', left:8, right:8, height:2 }}
-                      className="bg-emerald-400 shadow-lg shadow-emerald-400/60 rounded"
-                    />
+                  <div className="relative w-64 h-24">
+                    {[['top-0 left-0','border-t-4 border-l-4 rounded-tl-lg'],['top-0 right-0','border-t-4 border-r-4 rounded-tr-lg'],['bottom-0 left-0','border-b-4 border-l-4 rounded-bl-lg'],['bottom-0 right-0','border-b-4 border-r-4 rounded-br-lg']].map(([pos,cls],i)=>(
+                      <div key={i} className={`absolute w-7 h-7 border-emerald-400 ${pos} ${cls}`}/>
+                    ))}
+                    <motion.div animate={{ top:['8%','80%','8%'] }} transition={{ duration:2, repeat:Infinity, ease:'easeInOut' }}
+                      style={{ position:'absolute', left:6, right:6, height:2, background:`${G}`, boxShadow:`0 0 8px ${G}` }}
+                      className="rounded"/>
                     <div className="absolute inset-0 flex items-center justify-center">
-                      <span className="text-xs text-emerald-300 font-medium tracking-wider bg-black/40 px-2 py-0.5 rounded">
-                        ALIGN DATE HERE
-                      </span>
+                      <span className="text-[10px] text-emerald-300 font-bold tracking-widest bg-black/50 px-2 py-0.5 rounded">ALIGN DATE</span>
                     </div>
                   </div>
                 </div>
-                <div className="absolute bottom-4 left-0 right-0 flex justify-center gap-3">
-                  <motion.button whileHover={{ scale:1.05 }} whileTap={{ scale:0.95 }}
-                    onClick={capture}
-                    className="px-7 py-3 bg-emerald-600 text-white rounded-xl font-semibold flex items-center gap-2 shadow-xl">
-                    <Camera size={18}/> Capture
-                  </motion.button>
-                  <motion.button whileHover={{ scale:1.05 }} whileTap={{ scale:0.95 }}
-                    onClick={() => setShowCamera(false)}
-                    className="px-5 py-3 bg-gray-700/80 text-white rounded-xl font-medium flex items-center gap-2">
-                    <X size={16}/> Cancel
-                  </motion.button>
+                <div className="absolute bottom-3 left-0 right-0 flex justify-center gap-2">
+                  <button onClick={capture}
+                    className="px-5 py-2.5 rounded-xl text-sm font-bold text-white flex items-center gap-2 shadow-lg"
+                    style={{ background:`linear-gradient(135deg, ${G}, ${GD})` }}>
+                    <Camera size={15}/> Capture
+                  </button>
+                  <button onClick={() => setShowCamera(false)}
+                    className="px-4 py-2.5 rounded-xl text-sm font-bold text-white bg-gray-700 flex items-center gap-1.5">
+                    <X size={14}/> Cancel
+                  </button>
                 </div>
               </div>
-              <p className="text-xs text-gray-500 text-center">
-                Make sure the date text is clear, well-lit and inside the guide box
-              </p>
+              <p className="text-xs text-center text-gray-400">Make sure the date is sharp and well-lit</p>
             </div>
           )}
 
-          {/* Captured image + analysis panel */}
+          {/* Captured image + AI panel */}
           {capturedImage && !showCamera && (
-            <div className="grid md:grid-cols-2 gap-5">
-
-              {/* Image preview */}
-              <div className="rounded-xl overflow-hidden border border-gray-200 shadow-sm">
-                <img src={capturedImage} alt="Captured label" className="w-full h-auto"/>
-              </div>
-
-              {/* AI panel */}
-              <div className="flex flex-col gap-3">
-
-                {/* Result card */}
-                {scanResult && (
-                  <motion.div
-                    initial={{ opacity:0, scale:0.95 }} animate={{ opacity:1, scale:1 }}
-                    className={`p-4 rounded-xl border ${scanResult.found ? 'bg-emerald-50 border-emerald-200' : 'bg-amber-50 border-amber-200'}`}
-                  >
-                    {scanResult.found ? (
-                      <div>
-                        <div className="flex items-center gap-2 mb-2">
-                          <CheckCircle className="text-emerald-600 shrink-0" size={18}/>
-                          <span className="text-sm font-semibold text-emerald-800">Date detected!</span>
-                          {scanResult.confidence && (
-                            <span className={`ml-auto text-xs font-medium px-2 py-0.5 rounded-full border ${confidenceColor(scanResult.confidence)}`}>
-                              {scanResult.confidence}
-                            </span>
-                          )}
+            <div className="space-y-3">
+              <div className="grid grid-cols-2 gap-3">
+                <div className="rounded-xl overflow-hidden border border-gray-200 shadow-sm">
+                  <img src={capturedImage} alt="Captured" className="w-full h-auto"/>
+                </div>
+                <div className="flex flex-col gap-2">
+                  {/* Result */}
+                  {scanResult && (
+                    <motion.div initial={{ opacity:0, scale:0.96 }} animate={{ opacity:1, scale:1 }}
+                      className="p-3 rounded-xl border text-sm"
+                      style={{
+                        background: scanResult.found ? '#F0FDF4' : '#FFFBEB',
+                        borderColor: scanResult.found ? '#BBF7D0' : '#FDE68A',
+                      }}>
+                      {scanResult.found ? (
+                        <>
+                          <div className="flex items-center gap-1.5 mb-1">
+                            <CheckCircle size={14} style={{ color: G }}/>
+                            <span className="font-bold text-xs" style={{ color: G }}>Date found!</span>
+                          </div>
+                          <p className="font-black text-gray-900 text-base">{scanResult.display || scanResult.date}</p>
+                          <p className="text-xs text-gray-400 mt-0.5">↓ Auto-filled below</p>
+                        </>
+                      ) : (
+                        <div className="flex items-start gap-1.5">
+                          <AlertCircle size={14} className="text-amber-500 shrink-0 mt-0.5"/>
+                          <p className="text-xs font-semibold text-amber-800">No date found — enter manually</p>
                         </div>
-                        <p className="text-emerald-700 font-bold text-xl ml-6 mb-1">{scanResult.display || scanResult.date}</p>
-                        <p className="text-xs text-emerald-600 ml-6">↓ Auto-filled in the form below</p>
-                      </div>
-                    ) : (
-                      <div className="flex items-start gap-2">
-                        <AlertCircle className="text-amber-500 shrink-0 mt-0.5" size={18}/>
-                        <div>
-                          <p className="text-sm font-semibold text-amber-800">No date found</p>
-                          <p className="text-xs text-amber-700 mt-0.5">Retake a closer photo or enter the date manually</p>
-                        </div>
-                      </div>
-                    )}
-                  </motion.div>
-                )}
+                      )}
+                    </motion.div>
+                  )}
 
-                {/* Loading state */}
-                {aiLoading && (
-                  <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-xl">
-                    <div className="flex items-center gap-3">
-                      <Loader className="animate-spin text-emerald-600 shrink-0" size={20}/>
-                      <div>
-                        <p className="text-sm font-medium text-emerald-800">Analysing with AI…</p>
-                        <p className="text-xs text-emerald-600 mt-0.5">{aiStatus}</p>
-                      </div>
+                  {/* AI loading */}
+                  {aiLoading && (
+                    <div className="p-3 rounded-xl border text-xs font-medium flex items-center gap-2"
+                      style={{ background:`${G}0D`, borderColor:`${G}30`, color: G }}>
+                      <Loader className="animate-spin shrink-0" size={14}/>
+                      <span>{aiStatus}</span>
                     </div>
-                    {/* Animated dots */}
-                    <div className="flex gap-1.5 mt-3 ml-8">
-                      {[0,1,2].map(i => (
-                        <motion.div key={i}
-                          animate={{ opacity:[0.3,1,0.3], scale:[0.8,1.2,0.8] }}
-                          transition={{ duration:1.2, repeat:Infinity, delay:i*0.2 }}
-                          className="w-1.5 h-1.5 bg-emerald-500 rounded-full"
-                        />
-                      ))}
-                    </div>
+                  )}
+
+                  {/* Analyse button */}
+                  {!scanResult && !aiLoading && (
+                    <button onClick={analyseImage} type="button"
+                      className="flex-1 flex flex-col items-center justify-center gap-1.5 py-4 rounded-xl text-white font-bold text-sm shadow-md transition-all hover:opacity-90 active:scale-95"
+                      style={{ background:`linear-gradient(135deg, ${G}, ${GD})` }}>
+                      <Wand2 size={20}/>
+                      <span>Analyse with AI</span>
+                    </button>
+                  )}
+
+                  {scanResult && !aiLoading && (
+                    <button onClick={analyseImage} type="button"
+                      className="py-2 rounded-xl text-xs font-bold border-2 transition-all hover:opacity-80"
+                      style={{ borderColor: G, color: G }}>
+                      Re-analyse
+                    </button>
+                  )}
+
+                  <div className="flex gap-2">
+                    <button onClick={retake} type="button"
+                      className="flex-1 py-2 rounded-xl text-xs font-bold border-2 border-gray-200 text-gray-600 hover:bg-gray-50 flex items-center justify-center gap-1 transition-all">
+                      <RotateCcw size={12}/> Retake
+                    </button>
+                    <button onClick={discard} type="button"
+                      className="flex-1 py-2 rounded-xl text-xs font-bold border-2 text-red-500 flex items-center justify-center gap-1 transition-all hover:bg-red-50"
+                      style={{ borderColor:'#FF0000' }}>
+                      <Trash2 size={12}/> Discard
+                    </button>
                   </div>
-                )}
-
-                {/* Scan button — before result */}
-                {!scanResult && !aiLoading && (
-                  <motion.button
-                    whileHover={{ scale:1.02 }} whileTap={{ scale:0.98 }}
-                    onClick={analyseImage}
-                    className="w-full py-6 bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-600 hover:to-emerald-700 text-white rounded-xl shadow-lg shadow-emerald-500/20 transition-all"
-                  >
-                    <div className="flex flex-col items-center gap-2">
-                      <div className="flex items-center gap-2">
-                        <Wand2 size={26}/>
-                        <Zap size={16} className="text-yellow-300"/>
-                      </div>
-                      <span className="font-semibold text-lg">Analyse with AI</span>
-                      <span className="text-xs text-emerald-100">Powered by Puter · GPT-4o Vision · Free</span>
-                    </div>
-                  </motion.button>
-                )}
-
-                {/* Re-analyse */}
-                {scanResult && !aiLoading && (
-                  <button onClick={analyseImage}
-                    className="w-full py-2.5 border border-emerald-200 text-emerald-700 rounded-lg text-sm font-medium hover:bg-emerald-50 transition-colors flex items-center justify-center gap-2">
-                    <Wand2 size={14}/> Re-analyse
-                  </button>
-                )}
-
-                {/* Retake / Discard */}
-                <div className="flex gap-2 mt-auto">
-                  <button onClick={retake}
-                    className="flex-1 px-4 py-2.5 border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50 transition-colors flex items-center justify-center gap-2 text-sm">
-                    <RotateCcw size={15}/> Retake
-                  </button>
-                  <button onClick={discard}
-                    className="flex-1 px-4 py-2.5 border border-gray-200 rounded-lg text-rose-600 hover:bg-rose-50 transition-colors flex items-center justify-center gap-2 text-sm">
-                    <Trash2 size={15}/> Discard
-                  </button>
                 </div>
               </div>
             </div>
+          )}
+        </Section>
+
+        {/* ── 3. Expiry Date (always visible, glows when filled) ── */}
+        <div className="rounded-2xl border-2 bg-white p-5 transition-all"
+          style={{ borderColor: formData.expiryDate ? G : '#E2E8E0' }}>
+          <label className="flex items-center gap-2 text-sm font-bold text-gray-700 mb-3">
+            <div className="w-7 h-7 rounded-lg flex items-center justify-center"
+              style={{ background: formData.expiryDate ? `${G}20` : '#F3F4F6' }}>
+              <Calendar size={14} style={{ color: formData.expiryDate ? G : '#6B7280' }}/>
+            </div>
+            Expiry Date
+            {scanResult?.found && formData.expiryDate && (
+              <span className="ml-1 text-[11px] font-bold px-2 py-0.5 rounded-full"
+                style={{ background:`${G}20`, color: G }}>
+                ✓ AI filled
+              </span>
+            )}
+          </label>
+          <input type="date" name="expiryDate" value={formData.expiryDate} onChange={handleChange}
+            className="w-full px-4 py-3 rounded-xl border-2 text-sm font-semibold text-gray-800 outline-none transition-all"
+            style={{
+              borderColor: formData.expiryDate ? G : '#E5E7EB',
+              background: formData.expiryDate ? `${G}08` : '#FAFAFA',
+            }}
+          />
+          {formData.expiryDate && (
+            <p className="mt-2 text-xs font-medium text-gray-500">
+              📅 {new Date(formData.expiryDate+'T00:00:00').toLocaleDateString('en-US',{weekday:'long',year:'numeric',month:'long',day:'numeric'})}
+            </p>
           )}
         </div>
-      </motion.div>
 
-      {/* ── Product Details Form ── */}
-      <motion.div
-        initial={{ opacity:0, y:20 }} animate={{ opacity:1, y:0 }} transition={{ delay:0.1 }}
-        className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden"
-      >
-        <form onSubmit={handleSubmit} className="p-6">
-          <h2 className="text-lg font-semibold text-gray-800 flex items-center gap-2 mb-6">
-            <Package className="text-emerald-600" size={20}/> Product Details
-          </h2>
-
-          <div className="space-y-6">
-
-            {/* Product Name */}
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2 flex items-center gap-1">
-                <Package size={14} className="text-gray-500"/> Product Name <span className="text-rose-500">*</span>
-              </label>
-              <input type="text" name="name" value={formData.name} onChange={handleChange}
-                placeholder="e.g., Organic Milk, Fresh Apples"
-                className="w-full px-4 py-3 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all"/>
-            </div>
-
-            {/* Category */}
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2 flex items-center gap-1">
-                <Tag size={14} className="text-gray-500"/> Category
-              </label>
-              <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
-                {categories.map(cat => {
-                  const Icon = cat.icon;
-                  return (
-                    <motion.button key={cat.id} type="button"
-                      whileHover={{ scale:1.02 }} whileTap={{ scale:0.98 }}
-                      onClick={() => setFormData(prev => ({ ...prev, category: cat.label }))}
-                      className={`p-3 rounded-lg border-2 transition-all flex items-center gap-2 ${formData.category===cat.label ? 'border-emerald-500 bg-emerald-50' : 'border-gray-200 hover:border-emerald-200 bg-white'}`}>
-                      <div className={`p-1.5 rounded-lg ${cat.bgColor}`}><Icon className={cat.textColor} size={16}/></div>
-                      <span className="text-sm font-medium text-gray-700">{cat.label}</span>
-                    </motion.button>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* Expiry Date — glows when AI-filled */}
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2 flex items-center gap-2">
-                <Calendar size={14} className="text-gray-500"/> Expiry Date
-                {scanResult?.found && formData.expiryDate && (
-                  <span className="inline-flex items-center gap-1 text-xs bg-emerald-100 text-emerald-700 font-medium px-2 py-0.5 rounded-full border border-emerald-200">
-                    <Zap size={10}/> AI filled
-                  </span>
-                )}
-              </label>
-              <div className="relative">
-                <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" size={18}/>
-                <input type="date" name="expiryDate" value={formData.expiryDate} onChange={handleChange}
-                  className={`w-full pl-10 pr-4 py-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all ${
-                    scanResult?.found && formData.expiryDate
-                      ? 'border-emerald-400 bg-emerald-50/40 ring-1 ring-emerald-300'
-                      : 'border-gray-200'
-                  }`}
-                />
-              </div>
-              {formData.expiryDate && (
-                <p className="mt-1 text-xs text-gray-500">
-                  {new Date(formData.expiryDate + 'T00:00:00').toLocaleDateString('en-US', {
-                    weekday:'long', year:'numeric', month:'long', day:'numeric',
-                  })}
-                </p>
-              )}
-            </div>
-
-            {/* Storage Location */}
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2 flex items-center gap-1">
-                <MapPin size={14} className="text-gray-500"/> Storage Location
-              </label>
-              <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
-                {locations.map(loc => {
-                  const Icon = loc.icon;
-                  const bg = loc.color==='blue'?'bg-blue-50':loc.color==='amber'?'bg-amber-50':loc.color==='cyan'?'bg-cyan-50':'bg-gray-50';
-                  const tx = loc.color==='blue'?'text-blue-600':loc.color==='amber'?'text-amber-600':loc.color==='cyan'?'text-cyan-600':'text-gray-600';
-                  return (
-                    <motion.button key={loc.id} type="button"
-                      whileHover={{ scale:1.02 }} whileTap={{ scale:0.98 }}
-                      onClick={() => setFormData(prev => ({ ...prev, location: loc.label }))}
-                      className={`p-3 rounded-lg border-2 transition-all flex items-center gap-2 ${formData.location===loc.label ? 'border-emerald-500 bg-emerald-50' : 'border-gray-200 hover:border-emerald-200 bg-white'}`}>
-                      <div className={`p-1.5 rounded-lg ${bg}`}><Icon size={16} className={tx}/></div>
-                      <span className="text-sm font-medium text-gray-700">{loc.label}</span>
-                    </motion.button>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* Notes */}
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2 flex items-center gap-1">
-                <FileText size={14} className="text-gray-500"/> Notes (Optional)
-              </label>
-              <textarea name="notes" value={formData.notes} onChange={handleChange} rows="3"
-                placeholder="Add any additional notes about the product…"
-                className="w-full px-4 py-3 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 transition-all resize-none"/>
-            </div>
-
-            {/* Actions */}
-            <div className="flex items-center justify-end gap-3 pt-4 border-t border-gray-100">
-              <button type="button" onClick={() => navigate('/dashboard')}
-                className="px-6 py-2.5 border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50 transition-colors">
-                Cancel
-              </button>
-              <motion.button type="submit" disabled={loading || !formData.name}
-                whileHover={{ scale:1.02 }} whileTap={{ scale:0.98 }}
-                className="px-6 py-2.5 bg-gradient-to-r from-emerald-600 to-emerald-700 text-white rounded-lg font-medium hover:from-emerald-700 hover:to-emerald-800 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 shadow-sm">
-                {loading ? <><Loader className="animate-spin" size={18}/> Adding…</> : <><Plus size={18}/> Add Product</>}
-              </motion.button>
-            </div>
+        {/* ── 4. Category (accordion) ── */}
+        <Section
+          title="Category"
+          icon={Tag}
+          open={categoryOpen}
+          onToggle={() => setCategoryOpen(s => !s)}
+          badge={formData.category || null}
+        >
+          <div className="grid grid-cols-3 gap-2 pt-1">
+            {CATEGORIES.map(cat => {
+              const Icon = cat.icon;
+              const sel  = formData.category === cat.label;
+              return (
+                <button key={cat.id} type="button"
+                  onClick={() => { setFormData(prev => ({ ...prev, category: cat.label })); setCategoryOpen(false); }}
+                  className="flex flex-col items-center gap-1.5 py-3 px-2 rounded-xl border-2 text-xs font-bold transition-all active:scale-95"
+                  style={{
+                    borderColor: sel ? G : '#E5E7EB',
+                    background:  sel ? `${G}12` : cat.bg,
+                    color:       sel ? G : cat.color,
+                  }}>
+                  <div className="w-8 h-8 rounded-lg flex items-center justify-center"
+                    style={{ background: sel ? `${G}20` : `${cat.color}18` }}>
+                    <Icon size={16} style={{ color: sel ? G : cat.color }}/>
+                  </div>
+                  {cat.label}
+                </button>
+              );
+            })}
           </div>
-        </form>
-      </motion.div>
+        </Section>
 
-      {/* Quick Tips */}
-      <motion.div initial={{ opacity:0 }} animate={{ opacity:1 }} transition={{ delay:0.25 }}
-        className="mt-6 p-4 bg-emerald-50/50 rounded-xl border border-emerald-100">
-        <h3 className="text-sm font-medium text-emerald-800 flex items-center gap-2 mb-2">
-          <Sparkles size={16}/> Quick Tips
-        </h3>
-        <ul className="text-xs text-emerald-700 space-y-1">
-          <li className="flex items-center gap-2"><ChevronRight size={12}/> Hold camera steady — date text must be sharp and well-lit</li>
-          <li className="flex items-center gap-2"><ChevronRight size={12}/> AI reads all formats: JUL 2026, 31/07/2026, 07/2026, 2026-07-31</li>
-          <li className="flex items-center gap-2"><ChevronRight size={12}/> Puter AI may ask you to sign in once with a free Puter account</li>
-          <li className="flex items-center gap-2"><ChevronRight size={12}/> If scan misses, retake closer — or type the date manually</li>
-        </ul>
-      </motion.div>
+        {/* ── 5. Storage Location (accordion) ── */}
+        <Section
+          title="Storage Location"
+          icon={MapPin}
+          open={locationOpen}
+          onToggle={() => setLocationOpen(s => !s)}
+          badge={formData.location || null}
+        >
+          <div className="grid grid-cols-2 gap-2 pt-1 sm:grid-cols-3">
+            {LOCATIONS.map(loc => {
+              const Icon = loc.icon;
+              const sel  = formData.location === loc.label;
+              return (
+                <button key={loc.id} type="button"
+                  onClick={() => { setFormData(prev => ({ ...prev, location: loc.label })); setLocationOpen(false); }}
+                  className="flex items-center gap-2.5 px-3 py-3 rounded-xl border-2 text-sm font-bold transition-all active:scale-95"
+                  style={{
+                    borderColor: sel ? G : '#E5E7EB',
+                    background:  sel ? `${G}12` : loc.bg,
+                    color:       sel ? G : loc.color,
+                  }}>
+                  <div className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0"
+                    style={{ background: sel ? `${G}20` : `${loc.color}18` }}>
+                    <Icon size={14} style={{ color: sel ? G : loc.color }}/>
+                  </div>
+                  {loc.label}
+                </button>
+              );
+            })}
+          </div>
+        </Section>
 
+        {/* ── 6. Notes ── */}
+        <div className="rounded-2xl border-2 bg-white p-5 transition-all"
+          style={{ borderColor: formData.notes ? G : '#E2E8E0' }}>
+          <label className="flex items-center gap-2 text-sm font-bold text-gray-700 mb-3">
+            <div className="w-7 h-7 rounded-lg flex items-center justify-center"
+              style={{ background: formData.notes ? `${G}20` : '#F3F4F6' }}>
+              <FileText size={14} style={{ color: formData.notes ? G : '#6B7280' }}/>
+            </div>
+            Notes <span className="font-normal text-gray-400 text-xs">(optional)</span>
+          </label>
+          <textarea name="notes" value={formData.notes} onChange={handleChange} rows={3}
+            placeholder="Any special notes about this product…"
+            className="w-full px-4 py-3 rounded-xl border-2 text-sm font-medium text-gray-800 placeholder-gray-400 outline-none transition-all resize-none"
+            style={{
+              borderColor: formData.notes ? G : '#E5E7EB',
+              background: formData.notes ? `${G}08` : '#FAFAFA',
+            }}
+          />
+        </div>
+
+        {/* ── Action buttons ── */}
+        <div className="flex gap-3 pt-2">
+          <button type="button" onClick={() => navigate('/dashboard')}
+            className="flex-1 py-3.5 rounded-2xl text-sm font-bold border-2 border-gray-300 text-gray-600 hover:bg-gray-50 transition-all active:scale-95">
+            Cancel
+          </button>
+          <button
+            onClick={handleSubmit}
+            disabled={loading || !formData.name}
+            className="flex-[2] py-3.5 rounded-2xl text-sm font-bold text-white flex items-center justify-center gap-2 shadow-lg transition-all active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed"
+            style={{ background: loading || !formData.name ? '#9CA3AF' : `linear-gradient(135deg, ${G}, ${GD})` }}>
+            {loading
+              ? <><Loader className="animate-spin" size={16}/> Adding Product…</>
+              : <><Plus size={16}/> Add Product</>}
+          </button>
+        </div>
+
+      </div>
     </div>
   );
 }
-
-export default AddProduct;
