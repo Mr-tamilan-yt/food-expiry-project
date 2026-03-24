@@ -33,7 +33,7 @@ function getDays(expiryDate) {
 }
 
 const BG     = "#48A111";
-const BG_DRK = "#3a8a0d";
+const BG_DRK = "#19510A";
 const PAGE   = "#DBE4C9";
 
 export default function Dashboard() {
@@ -49,7 +49,6 @@ export default function Dashboard() {
 
   useEffect(() => { injectFont(); }, []);
 
-  // Close panels on outside click
   useEffect(() => {
     const handler = (e) => {
       if (!e.target.closest("#bell-panel") && !e.target.closest("#bell-btn")) setShowBell(false);
@@ -59,7 +58,6 @@ export default function Dashboard() {
     return () => document.removeEventListener("mousedown", handler);
   }, []);
 
-  // Fetch expiring products when bell is opened
   const openBell = async () => {
     const next = !showBell;
     setShowBell(next);
@@ -90,7 +88,6 @@ export default function Dashboard() {
     { id:"recipes",   icon:ChefHat,     label:"Recipes",    path:"/dashboard/recipes"   },
   ];
 
-  // urgency colour per item
   const urgencyColor = (days) =>
     days < 0  ? "#FF0000" :
     days <= 2 ? "#FF4500" :
@@ -105,27 +102,58 @@ export default function Dashboard() {
   return (
     <div className="min-h-screen flex flex-col" style={{ backgroundColor: PAGE, fontFamily: "'DM Sans', sans-serif" }}>
 
-      {/* ── Top Nav ── */}
+      {/* ══════════════════════════════════════════════════════════════
+          TOP NAV — Fixed: Dark green border radius for icons
+      ══════════════════════════════════════════════════════════════ */}
       <header
-        className="sticky top-0 z-50 shadow-lg"
-        style={{ background: `linear-gradient(135deg, ${BG} 0%, ${BG_DRK} 100%)` }}
+        className="sticky top-0 z-50"
+        style={{
+          background: "linear-gradient(105deg, rgba(212,235,200,0.85) 0%, rgba(228,243,218,0.80) 60%, rgba(218,238,208,0.85) 100%)",
+          backdropFilter: "blur(22px) saturate(150%)",
+          WebkitBackdropFilter: "blur(22px) saturate(150%)",
+          borderBottom: "1.5px solid rgba(255,255,255,0.50)",
+          boxShadow: "0 1px 24px rgba(72,161,17,0.06)",
+        }}
       >
         <div className="max-w-7xl mx-auto px-4 sm:px-6 py-3 flex items-center justify-between">
 
-          {/* Brand */}
+          {/* Brand — dark green text */}
           <motion.div initial={{ opacity:0, x:-20 }} animate={{ opacity:1, x:0 }}
             className="flex items-center gap-3">
-            <div className="relative">
-              <div className="absolute inset-0 bg-white/30 blur-xl rounded-full"/>
-              <div className="relative bg-white/20 backdrop-blur-sm p-2 rounded-xl border border-white/20">
-                <Leaf className="text-white w-5 h-5"/>
-              </div>
+            {/* Leaf icon pill — dark green border radius 1px */}
+            <div
+              style={{
+                width: 46,
+                height: 46,
+                borderRadius: "14px",
+                background: "rgba(72,161,17,0.15)",
+                border: "1.5px solid #48A111",
+                backdropFilter: "blur(10px)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                boxShadow: "0 2px 10px rgba(72,161,17,0.15)",
+              }}
+            >
+              <Leaf size={20} style={{ color: "#2d6610" }}/>
             </div>
             <div>
-              <h1 style={{ fontFamily:"'Playfair Display', serif", fontWeight:800, fontSize:"1.2rem", color:"white", letterSpacing:"-0.01em", lineHeight:1.1 }}>
+              <h1 style={{
+                fontFamily: "'DM Sans', sans-serif",
+                fontWeight: 800,
+                fontSize: "1.15rem",
+                color: "#1a2e10",
+                letterSpacing: "-0.01em",
+                lineHeight: 1.15,
+              }}>
                 FreshTrack
               </h1>
-              <p className="text-xs font-medium" style={{ color:"rgba(255,255,255,0.75)", letterSpacing:"0.04em" }}>
+              <p style={{
+                fontSize: "0.68rem",
+                fontWeight: 500,
+                color: "#4a6a36",
+                letterSpacing: "0.015em",
+              }}>
                 Smart Food Manager
               </p>
             </div>
@@ -134,30 +162,65 @@ export default function Dashboard() {
           {/* Right controls */}
           <div className="flex items-center gap-2">
 
-            {/* ── Bell button ── */}
+            {/* ── Bell — dark green border radius 1px ── */}
             <div className="relative">
               <motion.button
                 id="bell-btn"
-                whileHover={{ scale:1.08 }} whileTap={{ scale:0.93 }}
+                whileHover={{ scale:1.06 }} whileTap={{ scale:0.92 }}
                 onClick={openBell}
-                className="relative p-2.5 rounded-xl border border-white/20 backdrop-blur-sm transition-colors"
-                style={{ background: showBell ? "rgba(255,255,255,0.3)" : "rgba(255,255,255,0.15)" }}
+                style={{
+                  width: 46,
+                  height: 46,
+                  borderRadius: "14px",
+                  background: showBell ? "rgba(72,161,17,0.25)" : "rgba(72,161,17,0.12)",
+                  border: "1.5px solid #48A111",
+                  backdropFilter: "blur(10px)",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  boxShadow: "0 2px 8px rgba(0,0,0,0.06)",
+                  position: "relative",
+                }}
               >
-                <Bell size={18} className="text-white"/>
-                {/* Live badge — re-fetched on open, show dot always as reminder */}
+                <Bell size={18} style={{ color: "#2d4a1a" }}/>
                 {expiringItems.length > 0 && (
-                  <span className="absolute -top-1 -right-1 min-w-4.5 h-4.5 flex items-center justify-center rounded-full text-[10px] font-black text-white px-1"
-                    style={{ background:"#FF4500" }}>
+                  <span
+                    style={{
+                      position: "absolute",
+                      top: -4,
+                      right: -4,
+                      minWidth: 16,
+                      height: 16,
+                      background: "#FF4500",
+                      borderRadius: 8,
+                      fontSize: 9,
+                      fontWeight: 900,
+                      color: "white",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      paddingInline: 3,
+                    }}
+                  >
                     {expiringItems.length > 9 ? "9+" : expiringItems.length}
                   </span>
                 )}
                 {expiringItems.length === 0 && (
-                  <span className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 rounded-full border-2"
-                    style={{ background:"#FFD700", borderColor: BG }}/>
+                  <span
+                    style={{
+                      position: "absolute",
+                      top: 6,
+                      right: 6,
+                      width: 7,
+                      height: 7,
+                      background: "#F59E0B",
+                      borderRadius: "50%",
+                    }}
+                  />
                 )}
               </motion.button>
 
-              {/* ── Bell dropdown panel ── */}
+              {/* Bell dropdown panel */}
               <AnimatePresence>
                 {showBell && (
                   <motion.div
@@ -169,7 +232,6 @@ export default function Dashboard() {
                     className="absolute right-0 mt-3 w-80 rounded-2xl shadow-2xl z-50 overflow-hidden"
                     style={{ background:"white", border:`1.5px solid ${BG}33` }}
                   >
-                    {/* Panel header */}
                     <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100"
                       style={{ background:`linear-gradient(135deg, ${BG}18 0%, ${BG}08 100%)` }}>
                       <div className="flex items-center gap-2">
@@ -184,7 +246,6 @@ export default function Dashboard() {
                       </button>
                     </div>
 
-                    {/* Panel body */}
                     <div className="max-h-80 overflow-y-auto">
                       {bellLoading ? (
                         <div className="flex flex-col items-center justify-center py-8 gap-2">
@@ -216,10 +277,7 @@ export default function Dashboard() {
                                 className="flex items-center gap-3 px-3 py-2.5 rounded-xl"
                                 style={{ backgroundColor: bg }}
                               >
-                                {/* Urgency dot */}
                                 <div className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: color }}/>
-
-                                {/* Item info */}
                                 <div className="flex-1 min-w-0">
                                   <p className="text-sm font-bold text-gray-900 truncate">{item.name}</p>
                                   <div className="flex items-center gap-3 mt-0.5">
@@ -233,8 +291,6 @@ export default function Dashboard() {
                                     )}
                                   </div>
                                 </div>
-
-                                {/* Days badge */}
                                 <span className="shrink-0 text-[11px] font-black px-2 py-1 rounded-full text-white"
                                   style={{ backgroundColor: color }}>
                                   {days < 0  ? `${Math.abs(days)}d ago` :
@@ -248,7 +304,6 @@ export default function Dashboard() {
                       )}
                     </div>
 
-                    {/* Footer link */}
                     {expiringItems.length > 0 && (
                       <div className="px-4 py-2.5 border-t border-gray-100">
                         <button
@@ -265,23 +320,29 @@ export default function Dashboard() {
               </AnimatePresence>
             </div>
 
-            {/* ── User menu ── */}
+            {/* ── User avatar — dark green border radius 1px ── */}
             <div className="relative">
               <motion.button
                 id="user-btn"
-                whileHover={{ scale:1.02 }} whileTap={{ scale:0.98 }}
+                whileHover={{ scale:1.04 }} whileTap={{ scale:0.95 }}
                 onClick={() => setShowUserMenu(s => !s)}
-                className="flex items-center gap-2.5 p-1.5 pr-3 rounded-xl border border-white/20 hover:border-white/40 transition-all"
-                style={{ background:"rgba(255,255,255,0.15)" }}
+                style={{
+                  width: 46,
+                  height: 46,
+                  borderRadius: "14px",
+                  background: showUserMenu ? "rgba(72,161,17,0.25)" : "rgba(72,161,17,0.12)",
+                  border: "1.5px solid #48A111",
+                  backdropFilter: "blur(10px)",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  boxShadow: "0 2px 8px rgba(0,0,0,0.06)",
+                  fontWeight: 800,
+                  fontSize: "0.9rem",
+                  color: "#1a2e10",
+                }}
               >
-                <div className="w-8 h-8 rounded-lg flex items-center justify-center font-black text-sm"
-                  style={{ background:"rgba(255,255,255,0.25)", color:"white" }}>
-                  {user?.name?.charAt(0).toUpperCase()||"U"}
-                </div>
-                <div className="hidden sm:block text-left">
-                  <p className="text-sm font-bold text-white leading-tight">{user?.name||"User"}</p>
-                  <p className="text-[11px] font-medium" style={{ color:"rgba(255,255,255,0.7)" }}>{user?.email||""}</p>
-                </div>
+                {user?.name?.charAt(0).toUpperCase()||"U"}
               </motion.button>
 
               <AnimatePresence>
@@ -293,7 +354,6 @@ export default function Dashboard() {
                     exit={{    opacity:0, y:8, scale:0.97 }}
                     className="absolute right-0 mt-2 w-52 bg-white rounded-2xl shadow-2xl border border-gray-100 py-1.5 z-50 overflow-hidden"
                   >
-                    {/* User header in dropdown */}
                     <div className="px-4 py-3 border-b border-gray-100" style={{ background:`${BG}10` }}>
                       <p className="text-sm font-bold text-gray-800">{user?.name||"User"}</p>
                       <p className="text-xs text-gray-400 truncate">{user?.email||""}</p>
@@ -341,74 +401,89 @@ export default function Dashboard() {
         </AnimatePresence>
       </main>
 
-      {/* ── Bottom Nav ── */}
-      <nav
+      {/* ══════════════════════════════════════════════════════════════
+          BOTTOM NAV — Glassmorphism, full width, no bottom space
+      ══════════════════════════════════════════════════════════════ */}
+      <div
         className="sticky bottom-0 z-40"
-        style={{
-          background: `linear-gradient(135deg, ${BG} 0%, ${BG_DRK} 100%)`,
-          boxShadow: `0 -4px 24px ${BG}40`
-        }}
+        style={{ padding: "0" }}
       >
-        {/* Top highlight line */}
-        <div className="h-px" style={{ background:"rgba(255,255,255,0.25)" }}/>
-
-        <div className="max-w-7xl mx-auto px-4">
-          <div className="flex items-center justify-around py-1">
-            {navItems.map(item => {
-              const Icon     = item.icon;
-              const isActive = getActiveTab() === item.id;
-              return (
-                <motion.button
-                  key={item.id}
-                  whileHover={{ y:-3 }}
-                  whileTap={{ scale:0.93 }}
-                  onClick={() => navigate(item.path)}
-                  className="relative flex flex-col items-center py-2.5 px-5 rounded-2xl transition-all"
-                >
-                  {/* Active pill background */}
-                  {isActive && (
-                    <motion.div
-                      layoutId="activeTabBg"
-                      className="absolute inset-0 rounded-2xl"
-                      style={{ background:"rgba(255,255,255,0.22)", backdropFilter:"blur(8px)" }}
-                      transition={{ type:"spring", stiffness:320, damping:28 }}
-                    />
-                  )}
-
-                  {/* Icon */}
-                  <div className="relative mb-0.5">
-                    <Icon
-                      size={22}
-                      className="relative"
-                      style={{ color: isActive ? "white" : "rgba(255,255,255,0.55)" }}
-                    />
-                    {/* Active dot under icon */}
-                    {isActive && (
-                      <motion.span
-                        initial={{ scale:0, opacity:0 }}
-                        animate={{ scale:1, opacity:1 }}
-                        className="absolute -bottom-1.5 left-1/2 -translate-x-1/2 w-1.5 h-1.5 rounded-full bg-white"
-                      />
-                    )}
-                  </div>
-
-                  {/* Label */}
-                  <span
-                    className="relative text-[11px] font-bold tracking-wide"
+        <nav
+          style={{
+            background: "#19510A",
+            backdropFilter: "blur(20px) saturate(180%)",
+            WebkitBackdropFilter: "blur(20px) saturate(180%)",
+            borderRadius: "0",
+            boxShadow: "0 -2px 20px rgba(0,0,0,0.08), 0 1px 0 rgba(255,255,255,0.1) inset",
+            borderTop: "1px solid rgba(255,255,255,0.2)",
+            width: "100%",
+          }}
+        >
+          <div className="w-full px-2">
+            <div className="flex items-center justify-around" style={{ padding: "8px 0" }}>
+              {navItems.map(item => {
+                const Icon     = item.icon;
+                const isActive = getActiveTab() === item.id;
+                return (
+                  <motion.button
+                    key={item.id}
+                    whileHover={{ y: -2 }}
+                    whileTap={{ scale: 0.95 }}
+                    onClick={() => navigate(item.path)}
+                    className="relative flex flex-col items-center transition-all"
                     style={{
-                      color: isActive ? "white" : "rgba(255,255,255,0.55)",
-                      fontFamily:"'DM Sans', sans-serif",
-                      letterSpacing:"0.03em"
+                      borderRadius: 20,
+                      padding: "8px 16px",
+                      minWidth: 70,
                     }}
                   >
-                    {item.label}
-                  </span>
-                </motion.button>
-              );
-            })}
+                    {/* Active pill — glassmorphism style */}
+                    {isActive && (
+                      <motion.div
+                        layoutId="activeTabBg"
+                        className="absolute inset-0"
+                        style={{
+                          borderRadius: 20,
+                          background: "rgba(255,255,255,0.25)",
+                          backdropFilter: "blur(8px)",
+                          border: "1px solid rgba(255,255,255,0.3)",
+                        }}
+                        transition={{ type: "spring", stiffness: 340, damping: 30 }}
+                      />
+                    )}
+
+                    {/* Icon */}
+                    <div className="relative" style={{ marginBottom: 2 }}>
+                      <Icon
+                        size={22}
+                        style={{
+                          color: isActive ? "white" : "rgba(255,255,255,0.65)",
+                          position: "relative",
+                        }}
+                      />
+                    </div>
+
+                    {/* Label */}
+                    <span
+                      style={{
+                        position: "relative",
+                        fontSize: "10px",
+                        fontWeight: 700,
+                        letterSpacing: "0.02em",
+                        color: isActive ? "white" : "rgba(255,255,255,0.65)",
+                        fontFamily: "'DM Sans', sans-serif",
+                      }}
+                    >
+                      {item.label}
+                    </span>
+                  </motion.button>
+                );
+              })}
+            </div>
           </div>
-        </div>
-      </nav>
+        </nav>
+      </div>
+
     </div>
   );
 }

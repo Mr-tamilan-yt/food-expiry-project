@@ -28,19 +28,16 @@ function useIsMobile() {
 // ─────────────────────────────────────────────────────────────────────────────
 const AnimatedItem = ({ children, index, isMobile }) => {
   const ref    = useRef(null);
-  // triggerOnce:true on mobile — never re-fires during scroll, zero ongoing cost
   const inView = useInView(ref, { amount: 0.12, triggerOnce: true });
 
   if (!isMobile) {
     return (
       <motion.div
         ref={ref}
-        // NO layout / layoutId — eliminates continuous layout measurement on scroll
         initial={{ opacity: 0, y: 18, scale: 0.97 }}
         animate={{ opacity: 1, y: 0, scale: 1 }}
         exit={{ opacity: 0, scale: 0.95 }}
         transition={{ delay: index * 0.03, duration: 0.22, ease: [0.25, 0.46, 0.45, 0.94] }}
-        // whileHover uses CSS transform only — GPU composited, no layout
         whileHover={{ y: -5, scale: 1.016, transition: { type: "spring", stiffness: 520, damping: 24 } }}
         style={{ willChange: "transform" }}
       >
@@ -48,7 +45,6 @@ const AnimatedItem = ({ children, index, isMobile }) => {
       </motion.div>
     );
   }
-  // Mobile: inView animation, triggerOnce so no scroll-time re-renders
   return (
     <motion.div
       ref={ref}
@@ -115,7 +111,6 @@ function getDaysUntilExpiry(expiryDate) {
   return Math.ceil((exp - today) / 86400000);
 }
 
-// Returns warning string if user-entered date exceeds real-world safe window
 function getRealWorldWarning(category, location, days) {
   if (days < 0) return null;
   const maxSafe = getMaxShelfDays(category, location);
@@ -138,7 +133,7 @@ function getProductBucket(p) {
   const maxSafe = getMaxShelfDays(p.category, p.location);
   const warnWin = getWarnWindow(p.category);
   if (days < 0)                            return "expired";
-  if (maxSafe > 0 && days > maxSafe)       return "expiringSoon"; // real-world override
+  if (maxSafe > 0 && days > maxSafe)       return "expiringSoon";
   if (days <= warnWin)                     return "expiringSoon";
   return "fresh";
 }
@@ -193,7 +188,7 @@ function getSmartStatusLabel(p, days, bucket) {
 const BUCKET_ORDER = { expiringSoon:0, fresh:1, expired:2, used:3, wasted:4 };
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  VISUAL CONFIG — unchanged
+//  VISUAL CONFIG
 // ─────────────────────────────────────────────────────────────────────────────
 const BUCKET = {
   fresh:        { stripe:"from-[#48A111] to-[#3a8a0d]", cardBgHex:"#CBF3BB", border:"border-[#48A111]/40", ring:"ring-[#48A111]/20", glow:"shadow-[#48A111]/10", corner:"rounded-3xl",  icon: Leaf         },
@@ -220,6 +215,55 @@ const COLOR_MAP = {
 const CATEGORIES = ["Dairy","Vegetables","Fruits","Meat","Grains","Beverages","Snacks","Frozen","Other"];
 const LOCATIONS  = ["Pantry","Refrigerator","Freezer","Cabinet","Other"];
 
+const G = "#48A111";
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  LONG-PRESS HOOK
+// ─────────────────────────────────────────────────────────────────────────────
+function useLongPress(onLongPress, onClick, { delay = 500 } = {}) {
+  const timerRef = useRef(null);
+  const isLong   = useRef(false);
+  const startPos = useRef({ x: 0, y: 0 });
+
+  const start = useCallback((e) => {
+    isLong.current = false;
+    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+    const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+    startPos.current = { x: clientX, y: clientY };
+    timerRef.current = setTimeout(() => {
+      isLong.current = true;
+      onLongPress(e);
+    }, delay);
+  }, [onLongPress, delay]);
+
+  const clear = useCallback(() => {
+    clearTimeout(timerRef.current);
+  }, []);
+
+  const handleClick = useCallback((e) => {
+    if (!isLong.current) onClick(e);
+  }, [onClick]);
+
+  const handleMove = useCallback((e) => {
+    if (!e.touches && !e.clientX) return;
+    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+    const clientY = e.touches ? e.touches[0].clientY : e.clientY;
+    const dx = Math.abs(clientX - startPos.current.x);
+    const dy = Math.abs(clientY - startPos.current.y);
+    if (dx > 10 || dy > 10) clearTimeout(timerRef.current);
+  }, []);
+
+  return {
+    onMouseDown:   start,
+    onMouseUp:     clear,
+    onMouseLeave:  clear,
+    onTouchStart:  start,
+    onTouchEnd:    clear,
+    onTouchMove:   handleMove,
+    onClick:       handleClick,
+  };
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 //  COMPONENT
 // ─────────────────────────────────────────────────────────────────────────────
@@ -233,10 +277,23 @@ export default function ProductList() {
   const [editId,       setEditId]       = useState(null);
   const [editData,     setEditData]     = useState({});
   const [editLoading,  setEditLoading]  = useState(false);
-  const [flyingToUsed, setFlyingToUsed] = useState(new Set());
+
+  // ── Multi-select state ──────────────────────────────────────────────────
+  const [selectedIds,    setSelectedIds]    = useState(new Set());
+  const [selectMode,     setSelectMode]     = useState(false);
+  const [bulkLoading,    setBulkLoading]    = useState(false);
+  const [animatingOut,   setAnimatingOut]   = useState(new Set());
+
   const isMobile = useIsMobile();
 
   useEffect(() => { fetchProducts(); }, []);
+
+  // Close cat menu on outside click
+  useEffect(() => {
+    const h = (e) => { if (!e.target.closest("#cat-menu")) setShowCatMenu(false); };
+    document.addEventListener("mousedown", h);
+    return () => document.removeEventListener("mousedown", h);
+  }, []);
 
   const fetchProducts = async () => {
     try   { const { data } = await axios.get("/api/products"); setProducts(data); }
@@ -274,21 +331,27 @@ export default function ProductList() {
       return getDaysUntilExpiry(a.expiryDate) - getDaysUntilExpiry(b.expiryDate);
     });
 
-  const handleMarkUsed = useCallback(async (productId) => {
-    setFlyingToUsed(prev => new Set(prev).add(productId));
-    await new Promise(res => setTimeout(res, 480));
-    await axios.put(`/api/products/${productId}`, { status:"used" });
-    setFlyingToUsed(prev => { const s = new Set(prev); s.delete(productId); return s; });
-    fetchProducts();
+  // ── Single card mark-used ────────────────────────────────────────────────
+  const handleMarkUsed = useCallback(async (productId, e) => {
+    if (e) { e.stopPropagation(); e.preventDefault(); }
+    setAnimatingOut(prev => new Set(prev).add(productId));
+    axios.put(`/api/products/${productId}`, { status:"used" }).then(() => {
+      fetchProducts();
+    });
+    setTimeout(() => {
+      setAnimatingOut(prev => { const s = new Set(prev); s.delete(productId); return s; });
+    }, 200);
   }, []);
 
   const updateStatus  = async (id, status) => { await axios.put(`/api/products/${id}`, { status }); fetchProducts(); };
-  const deleteProduct = async (id) => {
+  const deleteProduct = async (id, e) => {
+    if (e) { e.stopPropagation(); e.preventDefault(); }
     if (!window.confirm("Delete this product?")) return;
     await axios.delete(`/api/products/${id}`);
     fetchProducts();
   };
-  const startEdit = (p) => {
+  const startEdit = (p, e) => {
+    if (e) { e.stopPropagation(); e.preventDefault(); }
     setEditId(p._id);
     setEditData({ name:p.name, category:p.category||"", expiryDate:p.expiryDate?p.expiryDate.split("T")[0]:"", location:p.location||"", notes:p.notes||"" });
   };
@@ -299,6 +362,75 @@ export default function ProductList() {
     finally   { setEditLoading(false); }
   };
 
+  // ── Multi-select helpers ────────────────────────────────────────────────
+  const enterSelectMode = useCallback((productId) => {
+    setSelectMode(true);
+    setSelectedIds(new Set([productId]));
+    if (navigator.vibrate) navigator.vibrate(40);
+  }, []);
+
+  const toggleSelect = useCallback((productId) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(productId)) next.delete(productId);
+      else next.add(productId);
+      return next;
+    });
+  }, []);
+
+  const exitSelectMode = useCallback(() => {
+    setSelectMode(false);
+    setSelectedIds(new Set());
+  }, []);
+
+  const selectAll = useCallback(() => {
+    setSelectedIds(new Set(visible.map(p => p._id)));
+  }, [visible]);
+
+  // ── Bulk Actions (Order: Delete, Restore, Used) ──────────────────────────
+  const handleBulkDelete = useCallback(async () => {
+    if (selectedIds.size === 0) return;
+    if (!window.confirm(`Delete ${selectedIds.size} item${selectedIds.size > 1 ? "s" : ""}?`)) return;
+    setBulkLoading(true);
+    const ids = [...selectedIds];
+    setAnimatingOut(new Set(ids));
+    await Promise.all(ids.map(id => axios.delete(`/api/products/${id}`)));
+    setTimeout(() => {
+      setAnimatingOut(new Set());
+      fetchProducts();
+      exitSelectMode();
+      setBulkLoading(false);
+    }, 220);
+  }, [selectedIds, exitSelectMode]);
+
+  const handleBulkRestore = useCallback(async () => {
+    if (selectedIds.size === 0) return;
+    setBulkLoading(true);
+    const ids = [...selectedIds];
+    setAnimatingOut(new Set(ids));
+    await Promise.all(ids.map(id => axios.put(`/api/products/${id}`, { status:"active" })));
+    setTimeout(() => {
+      setAnimatingOut(new Set());
+      fetchProducts();
+      exitSelectMode();
+      setBulkLoading(false);
+    }, 220);
+  }, [selectedIds, exitSelectMode]);
+
+  const handleBulkUsed = useCallback(async () => {
+    if (selectedIds.size === 0) return;
+    setBulkLoading(true);
+    const ids = [...selectedIds];
+    setAnimatingOut(new Set(ids));
+    await Promise.all(ids.map(id => axios.put(`/api/products/${id}`, { status:"used" })));
+    setTimeout(() => {
+      setAnimatingOut(new Set());
+      fetchProducts();
+      exitSelectMode();
+      setBulkLoading(false);
+    }, 220);
+  }, [selectedIds, exitSelectMode]);
+
   if (loading) return (
     <div className="flex justify-center items-center min-h-64">
       <div className="w-12 h-12 border-4 border-emerald-200 border-t-emerald-600 rounded-full animate-spin"/>
@@ -308,16 +440,13 @@ export default function ProductList() {
   return (
     <div className="space-y-5">
 
-      {/* ═══════════════════════════════════════════════════
-          HEADER — premium SaaS branding
-      ═══════════════════════════════════════════════════ */}
+      {/* HEADER */}
       <div className="text-center space-y-1.5">
         <motion.div
           initial={{ opacity:0, y:-14 }} animate={{ opacity:1, y:0 }}
           transition={{ duration:0.38, ease:"easeOut" }}
           className="flex items-center justify-center gap-2.5"
         >
-          {/* Icon mark */}
           <div
             className="w-9 h-9 rounded-xl flex items-center justify-center shadow-sm"
             style={{ background:"linear-gradient(135deg, #48A111 0%, #2d7a0a 100%)" }}
@@ -325,7 +454,6 @@ export default function ProductList() {
             <Zap size={18} className="text-white" fill="white"/>
           </div>
           <div className="text-left">
-            {/* Premium wordmark */}
             <h1
               className="leading-none font-black tracking-[-0.03em]"
               style={{
@@ -361,9 +489,7 @@ export default function ProductList() {
         </motion.p>
       </div>
 
-      {/* ═══════════════════════════════════════════════════
-          4 FILTER STAT CARDS — compact, max-w capped on desktop
-      ═══════════════════════════════════════════════════ */}
+      {/* FILTER STAT CARDS */}
       <motion.div
         initial={{ opacity:0, y:8 }} animate={{ opacity:1, y:0 }}
         transition={{ delay:0.18, duration:0.32 }}
@@ -400,65 +526,63 @@ export default function ProductList() {
         })}
       </motion.div>
 
-      {/* ═══════════════════════════════════════════════════
-          SEARCH BAR + ALL ITEMS button on the RIGHT
-      ═══════════════════════════════════════════════════ */}
+      {/* SEARCH BAR */}
       <motion.div
         initial={{ opacity:0, y:8 }} animate={{ opacity:1, y:0 }}
         transition={{ delay:0.3, duration:0.32 }}
-        className="relative max-w-xl mx-auto w-full flex items-stretch"
+        className="max-w-xl mx-auto w-full"
       >
-        {/* Search input */}
-        <div className="relative flex-1">
-          <div className="absolute inset-y-0 left-4 flex items-center pointer-events-none">
-            <Search size={16} className="text-[#48A111]"/>
+        <div className="flex items-center gap-2">
+          <div
+            className="relative flex-1 flex items-center"
+            style={{
+              background: "white",
+              borderRadius: "100px",
+              boxShadow: "0 2px 12px rgba(0,0,0,0.08)",
+              border: "1.5px solid #E5E7EB",
+            }}
+          >
+            <div className="absolute left-4 flex items-center pointer-events-none">
+              <Search size={16} style={{ color:"#9CA3AF" }}/>
+            </div>
+            <input
+              type="text" value={search} onChange={e => setSearch(e.target.value)}
+              placeholder="Search by name,"
+              className="w-full pl-10 pr-9 py-3 bg-transparent text-sm text-gray-700 placeholder-gray-400 focus:outline-none"
+              style={{ borderRadius:"100px" }}
+            />
+            <AnimatePresence>
+              {search && (
+                <motion.button
+                  initial={{ opacity:0, scale:0.7 }} animate={{ opacity:1, scale:1 }} exit={{ opacity:0, scale:0.7 }}
+                  transition={{ duration:0.1 }}
+                  onClick={() => setSearch("")}
+                  className="absolute right-3 text-gray-400 hover:text-gray-600 p-1"
+                >
+                  <X size={14}/>
+                </motion.button>
+              )}
+            </AnimatePresence>
           </div>
-          <input
-            type="text" value={search} onChange={e => setSearch(e.target.value)}
-            placeholder="Search by name, category or location…"
-            className="w-full pl-11 pr-9 py-2.75 bg-white border-2 border-r-0 rounded-l-2xl shadow-sm text-sm text-gray-700 placeholder-gray-400 focus:outline-none focus:ring-4 focus:ring-[#48A111]/20 transition-all"
-            style={{ borderColor:"#48A111" }}
-          />
-          <AnimatePresence>
-            {search && (
-              <motion.button
-                initial={{ opacity:0, scale:0.7 }} animate={{ opacity:1, scale:1 }} exit={{ opacity:0, scale:0.7 }}
-                transition={{ duration:0.12 }}
-                onClick={() => setSearch("")}
-                className="absolute inset-y-0 right-2 flex items-center text-gray-400 hover:text-gray-600"
-              >
-                <X size={15}/>
-              </motion.button>
-            )}
-          </AnimatePresence>
-        </div>
 
-        {/* All Items button — RIGHT side of search bar, same border */}
-        <motion.button
-          whileHover={{ scale:1.02, transition:{ type:"spring", stiffness:500, damping:22 } }}
-          whileTap={{ scale:0.96, transition:{ duration:0.07 } }}
-          onClick={() => setActiveFilter("all")}
-          className="shrink-0 flex items-center gap-1.5 px-3.5 rounded-r-2xl border-2 text-xs font-bold transition-colors duration-150 shadow-sm whitespace-nowrap"
-          style={activeFilter === "all"
-            ? { background:"#48A111", borderColor:"#2d6b0a", color:"#fff" }
-            : { background:"#CBF3BB", borderColor:"#48A111", color:"#48A111" }
-          }
-        >
-          <Package size={13}/>
-          <span>All Items</span>
-          <span
-            className="px-1.5 py-0.5 rounded-md text-[10px] font-black leading-none"
-            style={activeFilter === "all"
-              ? { background:"rgba(255,255,255,0.25)", color:"#fff" }
-              : { background:"#48A11120", color:"#2d6b0a" }
-            }
-          >{stats.all}</span>
-        </motion.button>
+          <motion.button
+            whileHover={{ scale:1.04 }}
+            whileTap={{ scale:0.96 }}
+            onClick={() => setActiveFilter("all")}
+            className="shrink-0 flex items-center gap-2 px-5 py-3 text-sm font-bold text-white transition-all"
+            style={{
+              background: "#19510A",
+              borderRadius: "100px",
+              boxShadow: "0 2px 10px rgba(25,81,10,0.35)",
+              whiteSpace: "nowrap",
+            }}
+          >
+            All Items
+          </motion.button>
+        </div>
       </motion.div>
 
-      {/* ═══════════════════════════════════════════════════
-          TOOLBAR
-      ═══════════════════════════════════════════════════ */}
+      {/* TOOLBAR */}
       <motion.div
         initial={{ opacity:0 }} animate={{ opacity:1 }} transition={{ delay:0.42 }}
         className="flex items-center justify-between gap-3 flex-wrap"
@@ -486,16 +610,21 @@ export default function ProductList() {
               </motion.button>
             )}
           </AnimatePresence>
+          {!selectMode && visible.length > 0 && (
+            <span className="text-xs text-gray-400 italic hidden sm:inline">
+              Hold card to multi-select
+            </span>
+          )}
         </div>
-        <div className="relative">
+        <div className="relative" id="cat-menu">
           <motion.button
-            whileHover={{ scale:1.02, transition:{ type:"spring", stiffness:500, damping:22 } }}
+            whileHover={{ scale:1.02 }}
             whileTap={{ scale:0.97 }}
             onClick={() => setShowCatMenu(s => !s)}
             className="flex items-center gap-2 px-4 py-2 bg-white border-2 rounded-xl text-sm font-semibold transition-all shadow-sm"
             style={{ borderColor:"#48A111", color:"#48A111" }}
           >
-            <Tag size={13}/>
+            <Leaf size={13}/>
             {selectedCat==="all" ? "Category" : selectedCat}
             <motion.div animate={{ rotate: showCatMenu?180:0 }} transition={{ duration:0.18 }}>
               <ChevronDown size={13}/>
@@ -524,9 +653,90 @@ export default function ProductList() {
         </div>
       </motion.div>
 
-      {/* ═══════════════════════════════════════════════════
-          EMPTY STATE
-      ═══════════════════════════════════════════════════ */}
+      {/* SELECT MODE BANNER — Order: Delete, Restore, Used */}
+      <AnimatePresence>
+        {selectMode && (
+          <motion.div
+            initial={{ opacity:0, y:-8, scale:0.98 }}
+            animate={{ opacity:1, y:0, scale:1 }}
+            exit={{ opacity:0, y:-8, scale:0.98 }}
+            transition={{ type:"spring", stiffness:380, damping:28 }}
+            className="sticky top-16 z-30 flex flex-wrap items-center gap-2 px-4 py-3 rounded-2xl shadow-xl"
+            style={{
+              background: "linear-gradient(135deg, #19510A, #2d7a0a)",
+              border: "1px solid rgba(255,255,255,0.12)",
+            }}
+          >
+            {/* Count */}
+            <div
+              className="w-8 h-8 rounded-xl flex items-center justify-center font-black text-sm text-white shrink-0"
+              style={{ background:"rgba(255,255,255,0.18)" }}
+            >
+              {selectedIds.size}
+            </div>
+            <span className="text-white font-bold text-sm flex-1 min-w-[80px]">
+              {selectedIds.size} item{selectedIds.size !== 1 ? "s" : ""} selected
+            </span>
+
+            {/* Select All */}
+            <button
+              onClick={selectAll}
+              className="text-xs font-bold px-3 py-1.5 rounded-xl transition-all shrink-0"
+              style={{ background:"rgba(255,255,255,0.15)", color:"white", border:"1px solid rgba(255,255,255,0.2)" }}
+            >
+              All
+            </button>
+
+            {/* Delete Button - First */}
+            <motion.button
+              whileTap={{ scale:0.94 }}
+              onClick={handleBulkDelete}
+              disabled={bulkLoading || selectedIds.size === 0}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-bold transition-all disabled:opacity-50 shrink-0"
+              style={{ background:"rgba(239,68,68,0.9)", color:"white" }}
+            >
+              {bulkLoading ? <RefreshCw size={14} className="animate-spin"/> : <Trash2 size={14}/>}
+              <span className="hidden sm:inline">Delete</span>
+            </motion.button>
+
+            {/* Restore Button - Second */}
+            <motion.button
+              whileTap={{ scale:0.94 }}
+              onClick={handleBulkRestore}
+              disabled={bulkLoading || selectedIds.size === 0}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-bold transition-all disabled:opacity-50 shrink-0"
+              style={{ background:"rgba(59,130,246,0.9)", color:"white" }}
+            >
+              {bulkLoading ? <RefreshCw size={14} className="animate-spin"/> : <RotateCcw size={14}/>}
+              <span className="hidden sm:inline">Restore</span>
+            </motion.button>
+
+            {/* Used Button - Third */}
+            <motion.button
+              whileTap={{ scale:0.94 }}
+              onClick={handleBulkUsed}
+              disabled={bulkLoading || selectedIds.size === 0}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-bold transition-all disabled:opacity-50 shrink-0"
+              style={{ background:"rgba(255,255,255,0.92)", color:"#19510A" }}
+            >
+              {bulkLoading ? <RefreshCw size={14} className="animate-spin"/> : <CheckCircle size={14}/>}
+              <span className="hidden sm:inline">Used</span>
+            </motion.button>
+
+            {/* Cancel */}
+            <motion.button
+              whileTap={{ scale:0.94 }}
+              onClick={exitSelectMode}
+              className="p-2 rounded-xl transition-all shrink-0"
+              style={{ background:"rgba(255,255,255,0.1)", color:"rgba(255,255,255,0.8)" }}
+            >
+              <X size={16}/>
+            </motion.button>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* EMPTY STATE */}
       <AnimatePresence>
         {visible.length === 0 && (
           <motion.div
@@ -550,9 +760,7 @@ export default function ProductList() {
         )}
       </AnimatePresence>
 
-      {/* ═══════════════════════════════════════════════════
-          PRODUCT GRID
-      ═══════════════════════════════════════════════════ */}
+      {/* PRODUCT GRID */}
       <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-5">
         <AnimatePresence mode="sync" initial={false}>
           {visible.map((product, idx) => {
@@ -568,19 +776,16 @@ export default function ProductList() {
             const lblColor    = getBarLabelColor(pct, bucket);
             const afterExpiry = bucket === "expired" ? getAfterExpiryStatus(product.category, product.location) : null;
             const warnWin     = getWarnWindow(product.category);
-
-            // Real-world override: fires when label date is unrealistically far
             const realWorldWarn = (bucket === "expiringSoon" || bucket === "fresh")
               ? getRealWorldWarning(product.category, product.location, days)
               : null;
-
-            const isExpired        = bucket === "expired";
-            const isUsed           = bucket === "used";
-            const isWasted         = bucket === "wasted";
-            const isActive         = product.status === "active";
-            const isFlying         = flyingToUsed.has(product._id);
-            // Hide "Used" button when realWorldWarn is active (item is flagged as unsafe)
-            const hideUsedBtn      = !!realWorldWarn;
+            const isExpired   = bucket === "expired";
+            const isUsed      = bucket === "used";
+            const isWasted    = bucket === "wasted";
+            const isActive    = product.status === "active";
+            const isAnimOut   = animatingOut.has(product._id);
+            const hideUsedBtn = !!realWorldWarn;
+            const isSelected  = selectedIds.has(product._id);
 
             const CONSUMED_MSG = {
               Dairy:"Dairy consumed before expiry — excellent stock rotation.",
@@ -596,322 +801,47 @@ export default function ProductList() {
             const consumedMsg = CONSUMED_MSG[product.category] || CONSUMED_MSG.Other;
 
             return (
-              <AnimatedItem key={product._id} index={idx} isMobile={isMobile}>
-                {/* Flying-to-used: pure opacity+scale+y, GPU composited only */}
-                <motion.div
-                  animate={isFlying ? {
-                    scale:  [1, 0.85, 0.5, 0.15],
-                    opacity:[1, 0.85, 0.5, 0   ],
-                    y:      [0, -8,  -28,  -64  ],
-                  } : undefined}
-                  transition={isFlying ? { duration: 0.44, ease: [0.4, 0, 0.8, 1] } : undefined}
-                  style={{ willChange: isFlying ? "transform, opacity" : "auto" }}
-                >
-                  <div
-                    className={`group relative border-2 overflow-hidden
-                      ${cfg.corner} ${cfg.border} shadow-md ${cfg.glow}
-                      ${isEdit ? `ring-2 ${cfg.ring}` : ""}`}
-                    style={{ backgroundColor:cfg.cardBgHex }}
-                  >
-                    {/* Top stripe */}
-                    <div className={`bg-linear-to-r ${cfg.stripe} w-full
-                      ${bucket==="expired"?"h-2":bucket==="expiringSoon"?"h-1.5":"h-1"}`}/>
-
-                    <div className="relative p-5 flex-1">
-                      {isEdit ? (
-                        /* ── EDIT FORM ── */
-                        <motion.div initial={{ opacity:0, y:5 }} animate={{ opacity:1, y:0 }} className="space-y-3">
-                          <div className="flex items-center justify-between mb-1">
-                            <span className="text-xs font-bold flex items-center gap-1.5 uppercase tracking-wide" style={{ color:"#48A111" }}>
-                              <Edit2 size={12}/> Edit Product
-                            </span>
-                            <motion.button whileTap={{ scale:0.88 }} onClick={() => setEditId(null)} className="text-gray-300 hover:text-gray-500 transition">
-                              <XCircle size={18}/>
-                            </motion.button>
-                          </div>
-                          {[
-                            {label:"Product Name",key:"name",type:"text",placeholder:"e.g. Organic Milk"},
-                            {label:"Expiry Date",key:"expiryDate",type:"date",placeholder:""},
-                          ].map(({label,key,type,placeholder}) => (
-                            <div key={key}>
-                              <label className="block text-[11px] font-semibold text-gray-400 uppercase tracking-wide mb-1">{label}</label>
-                              <input type={type} value={editData[key]} placeholder={placeholder}
-                                onChange={e => setEditData(d => ({...d,[key]:e.target.value}))}
-                                className="w-full px-3.5 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-800 bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#48A111]/30 focus:border-[#48A111] transition-all"/>
-                            </div>
-                          ))}
-                          {[
-                            {label:"Category",key:"category",options:CATEGORIES},
-                            {label:"Location",key:"location",options:LOCATIONS},
-                          ].map(({label,key,options}) => (
-                            <div key={key}>
-                              <label className="block text-[11px] font-semibold text-gray-400 uppercase tracking-wide mb-1">{label}</label>
-                              <select value={editData[key]} onChange={e => setEditData(d => ({...d,[key]:e.target.value}))}
-                                className="w-full px-3.5 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-800 bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#48A111]/30 focus:border-[#48A111] transition-all">
-                                <option value="">Select {label}</option>
-                                {options.map(o => <option key={o} value={o}>{o}</option>)}
-                              </select>
-                            </div>
-                          ))}
-                          <div>
-                            <label className="block text-[11px] font-semibold text-gray-400 uppercase tracking-wide mb-1">Notes</label>
-                            <textarea value={editData.notes} rows={2}
-                              onChange={e => setEditData(d => ({...d,notes:e.target.value}))}
-                              className="w-full px-3.5 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-800 bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#48A111]/30 focus:border-[#48A111] transition-all resize-none"
-                              placeholder="Optional notes…"/>
-                          </div>
-                          <div className="flex gap-2 pt-1">
-                            <motion.button whileTap={{ scale:0.97 }} onClick={saveEdit} disabled={editLoading||!editData.name}
-                              className="flex-1 flex items-center justify-center gap-2 py-2.5 text-white rounded-xl text-sm font-bold disabled:opacity-50 transition-all shadow-sm"
-                              style={{ background:"linear-gradient(to right, #48A111, #3a8a0d)" }}>
-                              {editLoading?<RefreshCw size={14} className="animate-spin"/>:<Save size={14}/>}
-                              Save Changes
-                            </motion.button>
-                            <motion.button whileTap={{ scale:0.97 }} onClick={() => setEditId(null)}
-                              className="px-4 py-2.5 border border-gray-200 text-gray-500 rounded-xl text-sm font-medium hover:bg-gray-50 transition-all">
-                              Cancel
-                            </motion.button>
-                          </div>
-                        </motion.div>
-                      ) : (
-                        /* ── PRODUCT VIEW ── */
-                        <>
-                          {/* Consumed banner — used cards only */}
-                          {isUsed && (
-                            <motion.div
-                              initial={{ opacity:0, y:-8, scale:0.96 }}
-                              animate={{ opacity:1, y:0, scale:1 }}
-                              transition={{ type:"spring", stiffness:280, damping:24 }}
-                              className="mb-4 rounded-2xl overflow-hidden"
-                              style={{ background:"linear-gradient(135deg, #0c4a6e 0%, #0369a1 55%, #0284c7 100%)", boxShadow:"0 2px 12px rgba(3,105,161,0.22)" }}
-                            >
-                              <div className="px-4 py-3">
-                                <div className="flex items-center justify-between mb-2">
-                                  <div className="flex items-center gap-2">
-                                    <div className="w-6 h-6 rounded-lg flex items-center justify-center" style={{ background:"rgba(255,255,255,0.12)" }}>
-                                      <ShieldCheck size={13} className="text-white"/>
-                                    </div>
-                                    <span className="text-[10px] font-black uppercase tracking-widest" style={{ color:"rgba(255,255,255,0.75)" }}>Item Consumed</span>
-                                  </div>
-                                  <span className="text-[10px] font-semibold tabular-nums" style={{ color:"rgba(255,255,255,0.45)" }}>100%</span>
-                                </div>
-                                <p className="text-[11px] font-medium leading-relaxed mb-2.5" style={{ color:"rgba(255,255,255,0.65)" }}>{consumedMsg}</p>
-                                <div className="h-0.75 rounded-full overflow-hidden" style={{ background:"rgba(255,255,255,0.15)" }}>
-                                  <motion.div
-                                    initial={{ width:0 }} animate={{ width:"100%" }}
-                                    transition={{ duration:0.9, ease:"easeOut", delay:0.2 }}
-                                    className="h-full rounded-full" style={{ background:"rgba(255,255,255,0.85)" }}
-                                  />
-                                </div>
-                              </div>
-                            </motion.div>
-                          )}
-
-                          {/* Unsafe storage warning — never on used/wasted */}
-                          <AnimatePresence>
-                            {unsafeWarn && !isUsed && !isWasted && (
-                              <motion.div
-                                initial={{ opacity:0, height:0 }} animate={{ opacity:1, height:"auto" }} exit={{ opacity:0, height:0 }}
-                                className="mb-3 px-3 py-2 rounded-xl border flex items-start gap-2 text-xs font-semibold overflow-hidden"
-                                style={{ background:"#FFF1F2", borderColor:"#FECACA", color:"#BE123C" }}
-                              >
-                                <AlertOctagon size={13} className="shrink-0 mt-0.5"/>
-                                {unsafeWarn.msg}
-                              </motion.div>
-                            )}
-                          </AnimatePresence>
-
-                          {/* Real-world safety warning */}
-                          <AnimatePresence>
-                            {realWorldWarn && (
-                              <motion.div
-                                initial={{ opacity:0, height:0 }} animate={{ opacity:1, height:"auto" }} exit={{ opacity:0, height:0 }}
-                                className="mb-3 px-3 py-2.5 rounded-xl border flex items-start gap-2 text-xs font-semibold overflow-hidden"
-                                style={{ background:"#FFFBEB", borderColor:"#FDE68A", color:"#92400E" }}
-                              >
-                                <AlertTriangle size={13} className="shrink-0 mt-0.5 text-amber-500"/>
-                                <span>{realWorldWarn}</span>
-                              </motion.div>
-                            )}
-                          </AnimatePresence>
-
-                          {/* Card header */}
-                          <div className="flex items-start justify-between gap-3 mb-4">
-                            <div className="flex items-center gap-3 min-w-0">
-                              <motion.div
-                                whileHover={{ scale:1.12, rotate:5, transition:{ type:"spring", stiffness:500, damping:18 } }}
-                                style={{ willChange:"transform" }}
-                                className={`shrink-0 w-10 h-10 rounded-xl flex items-center justify-center bg-linear-to-br ${cfg.stripe} shadow-sm`}
-                              >
-                                <BIcon size={18} className="text-white"/>
-                              </motion.div>
-                              <div className="min-w-0">
-                                <h3 className="font-bold text-gray-900 text-base leading-tight truncate">{product.name}</h3>
-                                <span className="text-xs text-gray-400 flex items-center gap-1 mt-0.5">
-                                  <Tag size={10}/>{product.category || "Uncategorised"}
-                                </span>
-                              </div>
-                            </div>
-                            <span
-                              className="shrink-0 text-[11px] font-bold px-2.5 py-1 rounded-full border flex items-center gap-1"
-                              style={{ background:`${smartStatus.color}15`, color:smartStatus.color, borderColor:`${smartStatus.color}30` }}
-                            >
-                              <smartStatus.icon size={10}/>
-                              {smartStatus.label}
-                            </span>
-                          </div>
-
-                          {/* Info rows */}
-                          <div className="space-y-2 mb-4">
-                            <div className="flex items-center gap-2.5 text-sm">
-                              <div className="w-7 h-7 rounded-lg bg-gray-100 flex items-center justify-center shrink-0">
-                                <Calendar size={13} className="text-black"/>
-                              </div>
-                              <span className="font-black text-black underline underline-offset-2 decoration-black/40">
-                                {new Date(product.expiryDate).toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric",year:"numeric"})}
-                              </span>
-                            </div>
-                            <div className="flex items-center gap-2.5 text-sm">
-                              <div className="w-7 h-7 rounded-lg bg-gray-100 flex items-center justify-center shrink-0">
-                                <MapPin size={13} className="text-black"/>
-                              </div>
-                              <span className="font-black text-black underline underline-offset-2 decoration-black/40">
-                                {product.location || "—"}
-                              </span>
-                            </div>
-                            {product.notes && (
-                              <div className="flex items-start gap-2.5 text-sm">
-                                <div className="w-7 h-7 rounded-lg bg-gray-100 flex items-center justify-center shrink-0 mt-0.5">
-                                  <StickyNote size={13} className="text-gray-400"/>
-                                </div>
-                                <span className="text-gray-400 italic line-clamp-1">"{product.notes}"</span>
-                              </div>
-                            )}
-                          </div>
-
-                          {/*
-                            Smart context hint — ONLY when no realWorldWarn active.
-                            When realWorldWarn is showing, the hint is redundant and
-                            the freshness bar is also hidden (see below).
-                          */}
-                          {isActive && !isUsed && days >= 0 && !realWorldWarn && (
-                            <div className="mb-3 px-3 py-1.5 rounded-lg text-[11px] font-medium text-gray-500 bg-white/60 border border-gray-200/60">
-                              {bucket === "expiringSoon"
-                                ? `Based on ${product.location||"storage"}, use within ${days} day${days!==1?"s":""}`
-                                : `Based on ${product.location||"storage"}, safe for ~${Math.max(0, days-warnWin)} more days`
-                              }
-                            </div>
-                          )}
-
-                          {/* After-expiry advisory */}
-                          <AnimatePresence>
-                            {afterExpiry && (
-                              <motion.div
-                                initial={{ opacity:0, height:0 }} animate={{ opacity:1, height:"auto" }} exit={{ opacity:0, height:0 }}
-                                className="mb-3 px-3 py-2 rounded-xl border flex items-start gap-2 text-xs font-semibold overflow-hidden"
-                                style={{
-                                  background:  afterExpiry==="risky"?"#FFF1F2":afterExpiry==="quality_reduce"?"#F5F3FF":"#FFFBEB",
-                                  borderColor: afterExpiry==="risky"?"#FECACA":afterExpiry==="quality_reduce"?"#DDD6FE":"#FDE68A",
-                                  color:       afterExpiry==="risky"?"#BE123C":afterExpiry==="quality_reduce"?"#6D28D9":"#92400E",
-                                }}
-                              >
-                                <Info size={13} className="shrink-0 mt-0.5"/>
-                                {afterExpiry==="risky"
-                                  ? `${product.category} past expiry — not recommended. Discard if unsure.`
-                                  : afterExpiry==="quality_reduce"
-                                    ? "Frozen past expiry — still safe but quality may have reduced."
-                                    : afterExpiry==="probably_safe"
-                                      ? `${product.category} may still be okay — check for spoilage before consuming.`
-                                      : "Check for spoilage (smell/look) before consuming."
-                                }
-                              </motion.div>
-                            )}
-                          </AnimatePresence>
-
-                          {/*
-                            Freshness bar — hidden when realWorldWarn is active.
-                            The bar would be misleadingly low/confusing alongside the
-                            warning banner, so we remove both the bar AND its label together.
-                          */}
-                          {isActive && !isUsed && days >= 0 && !realWorldWarn && (
-                            <div className="mb-4">
-                              <div className="flex justify-between text-[11px] font-semibold mb-1.5">
-                                <span className="font-bold text-black">Freshness</span>
-                                <span style={{ color:lblColor }}>{pct}%</span>
-                              </div>
-                              <div className="h-2 bg-gray-200/70 rounded-full overflow-hidden">
-                                <motion.div
-                                  initial={{ width:0 }}
-                                  animate={{ width:`${Math.max(2,pct)}%` }}
-                                  transition={{ duration:0.9, ease:"easeOut" }}
-                                  className="h-full rounded-full"
-                                  style={{ background:barColor }}
-                                />
-                              </div>
-                            </div>
-                          )}
-
-                          {/* ACTION BUTTONS */}
-                          <div className="flex gap-2 pt-3 border-t border-gray-100 flex-wrap">
-
-                            {/*
-                              Used button:
-                              - Hidden when realWorldWarn is active (item flagged as unsafe)
-                              - Hidden when expired
-                              - Only shown for active items
-                            */}
-                            {isActive && !isExpired && !hideUsedBtn && (
-                              <motion.button
-                                whileHover={{ scale:1.05, transition:{ type:"spring", stiffness:600, damping:18 } }}
-                                whileTap={{ scale:0.91, transition:{ duration:0.07 } }}
-                                onClick={() => handleMarkUsed(product._id)}
-                                className="flex items-center gap-1.5 text-xs font-bold text-white px-3.5 py-2 rounded-xl transition-colors shadow-sm"
-                                style={{ background:"linear-gradient(to right, #48A111, #3a8a0d)" }}
-                              >
-                                <CheckCircle size={13}/> Used
-                              </motion.button>
-                            )}
-
-                            {/* Restore — used/wasted only */}
-                            {(isUsed || isWasted) && (
-                              <motion.button
-                                whileHover={{ scale:1.05, transition:{ type:"spring", stiffness:600, damping:18 } }}
-                                whileTap={{ scale:0.91, transition:{ duration:0.07 } }}
-                                onClick={() => updateStatus(product._id, "active")}
-                                className="flex items-center gap-1.5 text-xs font-bold bg-linear-to-r from-blue-500 to-indigo-600 text-white px-3.5 py-2 rounded-xl transition-colors shadow-sm"
-                              >
-                                <RotateCcw size={13}/> Restore
-                              </motion.button>
-                            )}
-
-                            {/* Edit — all cards */}
-                            <motion.button
-                              whileHover={{ scale:1.05, transition:{ type:"spring", stiffness:600, damping:18 } }}
-                              whileTap={{ scale:0.91, transition:{ duration:0.07 } }}
-                              onClick={() => startEdit(product)}
-                              className="flex items-center gap-1.5 text-xs font-bold text-white px-3.5 py-2 rounded-xl transition-colors shadow-sm"
-                              style={{ backgroundColor:"#111111" }}
-                            >
-                              <Edit2 size={13} color="white"/> Edit
-                            </motion.button>
-
-                            {/* Delete — always */}
-                            <motion.button
-                              whileHover={{ scale:1.05, transition:{ type:"spring", stiffness:600, damping:18 } }}
-                              whileTap={{ scale:0.91, transition:{ duration:0.07 } }}
-                              onClick={() => deleteProduct(product._id)}
-                              className="flex items-center gap-1.5 text-xs font-bold bg-white px-3.5 py-2 rounded-xl transition-colors ml-auto"
-                              style={{ border:"2px solid #FF0000", color:"#FF0000" }}
-                            >
-                              <Trash2 size={13} color="#FF0000"/> Delete
-                            </motion.button>
-                          </div>
-                        </>
-                      )}
-                    </div>
-                  </div>
-                </motion.div>
-              </AnimatedItem>
+              <ProductCard
+                key={product._id}
+                product={product}
+                index={idx}
+                isMobile={isMobile}
+                bucket={bucket}
+                cfg={cfg}
+                days={days}
+                isEdit={isEdit}
+                BIcon={BIcon}
+                smartStatus={smartStatus}
+                unsafeWarn={unsafeWarn}
+                pct={pct}
+                barColor={barColor}
+                lblColor={lblColor}
+                afterExpiry={afterExpiry}
+                warnWin={warnWin}
+                realWorldWarn={realWorldWarn}
+                isExpired={isExpired}
+                isUsed={isUsed}
+                isWasted={isWasted}
+                isActive={isActive}
+                isAnimOut={isAnimOut}
+                hideUsedBtn={hideUsedBtn}
+                isSelected={isSelected}
+                consumedMsg={consumedMsg}
+                selectMode={selectMode}
+                editId={editId}
+                editData={editData}
+                editLoading={editLoading}
+                selectedIds={selectedIds}
+                onMarkUsed={handleMarkUsed}
+                onUpdateStatus={updateStatus}
+                onDeleteProduct={deleteProduct}
+                onStartEdit={startEdit}
+                onSaveEdit={saveEdit}
+                onCancelEdit={() => setEditId(null)}
+                onEditDataChange={setEditData}
+                onEnterSelectMode={enterSelectMode}
+                onToggleSelect={toggleSelect}
+              />
             );
           })}
         </AnimatePresence>
@@ -921,10 +851,363 @@ export default function ProductList() {
         <motion.div initial={{ opacity:0 }} animate={{ opacity:1 }} transition={{ delay:0.3 }} className="flex justify-center pt-2">
           <p className="text-xs font-semibold text-gray-500 px-4 py-2 bg-white border border-gray-200 rounded-full shadow-sm">
             Showing {visible.length} of {products.length} products
+            {selectMode && selectedIds.size > 0 && (
+              <span style={{ color:G }}> · {selectedIds.size} selected</span>
+            )}
           </p>
         </motion.div>
       )}
+
+      {selectMode && <div className="h-4"/>}
     </div>
   );
 }
 
+// ProductCard component with inline freshness text and date
+function ProductCard({
+  product, index, isMobile, bucket, cfg, days, isEdit, BIcon, smartStatus,
+  unsafeWarn, pct, barColor, lblColor, afterExpiry, warnWin, realWorldWarn,
+  isExpired, isUsed, isWasted, isActive, isAnimOut, hideUsedBtn, isSelected,
+  consumedMsg, selectMode, editId, editData, editLoading, selectedIds,
+  onMarkUsed, onUpdateStatus, onDeleteProduct, onStartEdit, onSaveEdit,
+  onCancelEdit, onEditDataChange, onEnterSelectMode, onToggleSelect
+}) {
+  const isEditing = editId === product._id;
+  
+  const longPressHandlers = useLongPress(
+    () => {
+      if (!selectMode) onEnterSelectMode(product._id);
+      else onToggleSelect(product._id);
+    },
+    () => {
+      if (selectMode) onToggleSelect(product._id);
+    },
+    { delay: 480 }
+  );
+
+  return (
+    <AnimatedItem index={index} isMobile={isMobile}>
+      <motion.div
+        animate={isAnimOut ? {
+          scale: [1, 0.88, 0.3],
+          opacity: [1, 0.7, 0],
+          y: [0, -4, -20],
+        } : undefined}
+        transition={isAnimOut ? { duration: 0.2, ease: [0.4, 0, 0.8, 1] } : undefined}
+        style={{ willChange: isAnimOut ? "transform, opacity" : "auto" }}
+      >
+        <div
+          {...(isEditing ? {} : longPressHandlers)}
+          className={`group relative border-2 overflow-hidden cursor-pointer select-none
+            ${cfg.corner} ${cfg.border} shadow-md ${cfg.glow}
+            ${isEditing ? `ring-2 ${cfg.ring}` : ""}
+            ${isSelected ? "ring-2 ring-offset-1" : ""}
+          `}
+          style={{
+            backgroundColor: cfg.cardBgHex,
+            ringColor: isSelected ? "#48A111" : undefined,
+            outline: isSelected ? `2px solid #48A111` : "none",
+            outlineOffset: isSelected ? "2px" : undefined,
+            transition: "outline 0.1s, transform 0.1s",
+          }}
+        >
+          <div className={`bg-linear-to-r ${cfg.stripe} w-full
+            ${bucket==="expired"?"h-2":bucket==="expiringSoon"?"h-1.5":"h-1"}`}/>
+
+          <AnimatePresence>
+            {selectMode && (
+              <motion.div
+                initial={{ opacity:0, scale:0.5 }}
+                animate={{ opacity:1, scale:1 }}
+                exit={{ opacity:0, scale:0.5 }}
+                transition={{ type:"spring", stiffness:500, damping:25 }}
+                className="absolute top-3 right-3 z-10 w-7 h-7 rounded-full flex items-center justify-center border-2 shadow-md"
+                style={{
+                  background: isSelected ? "#48A111" : "white",
+                  borderColor: isSelected ? "#48A111" : "#D1D5DB",
+                }}
+              >
+                {isSelected && (
+                  <motion.div
+                    initial={{ scale:0 }}
+                    animate={{ scale:1 }}
+                    transition={{ type:"spring", stiffness:600, damping:20 }}
+                  >
+                    <CheckCircle size={16} color="white" fill="white"/>
+                  </motion.div>
+                )}
+              </motion.div>
+            )}
+          </AnimatePresence>
+
+          <div className="relative p-5 flex-1">
+            {isEditing ? (
+              <motion.div initial={{ opacity:0, y:5 }} animate={{ opacity:1, y:0 }} className="space-y-3">
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-xs font-bold flex items-center gap-1.5 uppercase tracking-wide" style={{ color:"#48A111" }}>
+                    <Edit2 size={12}/> Edit Product
+                  </span>
+                  <motion.button whileTap={{ scale:0.88 }} onClick={onCancelEdit} className="text-gray-300 hover:text-gray-500 transition">
+                    <XCircle size={18}/>
+                  </motion.button>
+                </div>
+                {[
+                  {label:"Product Name",key:"name",type:"text",placeholder:"e.g. Organic Milk"},
+                  {label:"Expiry Date",key:"expiryDate",type:"date",placeholder:""},
+                ].map(({label,key,type,placeholder}) => (
+                  <div key={key}>
+                    <label className="block text-[11px] font-semibold text-gray-400 uppercase tracking-wide mb-1">{label}</label>
+                    <input type={type} value={editData[key]} placeholder={placeholder}
+                      onChange={e => onEditDataChange(d => ({...d,[key]:e.target.value}))}
+                      className="w-full px-3.5 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-800 bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#48A111]/30 focus:border-[#48A111] transition-all"/>
+                  </div>
+                ))}
+                {[
+                  {label:"Category",key:"category",options:CATEGORIES},
+                  {label:"Location",key:"location",options:LOCATIONS},
+                ].map(({label,key,options}) => (
+                  <div key={key}>
+                    <label className="block text-[11px] font-semibold text-gray-400 uppercase tracking-wide mb-1">{label}</label>
+                    <select value={editData[key]} onChange={e => onEditDataChange(d => ({...d,[key]:e.target.value}))}
+                      className="w-full px-3.5 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-800 bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#48A111]/30 focus:border-[#48A111] transition-all">
+                      <option value="">Select {label}</option>
+                      {options.map(o => <option key={o} value={o}>{o}</option>)}
+                    </select>
+                  </div>
+                ))}
+                <div>
+                  <label className="block text-[11px] font-semibold text-gray-400 uppercase tracking-wide mb-1">Notes</label>
+                  <textarea value={editData.notes} rows={2}
+                    onChange={e => onEditDataChange(d => ({...d,notes:e.target.value}))}
+                    className="w-full px-3.5 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-800 bg-gray-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#48A111]/30 focus:border-[#48A111] transition-all resize-none"
+                    placeholder="Optional notes…"/>
+                </div>
+                <div className="flex gap-2 pt-1">
+                  <motion.button whileTap={{ scale:0.97 }} onClick={onSaveEdit} disabled={editLoading||!editData.name}
+                    className="flex-1 flex items-center justify-center gap-2 py-2.5 text-white rounded-xl text-sm font-bold disabled:opacity-50 transition-all shadow-sm"
+                    style={{ background:"linear-gradient(to right, #48A111, #3a8a0d)" }}>
+                    {editLoading?<RefreshCw size={14} className="animate-spin"/>:<Save size={14}/>}
+                    Save Changes
+                  </motion.button>
+                  <motion.button whileTap={{ scale:0.97 }} onClick={onCancelEdit}
+                    className="px-4 py-2.5 border border-gray-200 text-gray-500 rounded-xl text-sm font-medium hover:bg-gray-50 transition-all">
+                    Cancel
+                  </motion.button>
+                </div>
+              </motion.div>
+            ) : (
+              <>
+                {isUsed && (
+                  <motion.div
+                    initial={{ opacity:0, y:-8, scale:0.96 }}
+                    animate={{ opacity:1, y:0, scale:1 }}
+                    transition={{ type:"spring", stiffness:280, damping:24 }}
+                    className="mb-4 rounded-2xl overflow-hidden"
+                    style={{ background:"linear-gradient(135deg, #0c4a6e 0%, #0369a1 55%, #0284c7 100%)", boxShadow:"0 2px 12px rgba(3,105,161,0.22)" }}
+                  >
+                    <div className="px-4 py-3">
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="flex items-center gap-2">
+                          <div className="w-6 h-6 rounded-lg flex items-center justify-center" style={{ background:"rgba(255,255,255,0.12)" }}>
+                            <ShieldCheck size={13} className="text-white"/>
+                          </div>
+                          <span className="text-[10px] font-black uppercase tracking-widest" style={{ color:"rgba(255,255,255,0.75)" }}>Item Consumed</span>
+                        </div>
+                        <span className="text-[10px] font-semibold tabular-nums" style={{ color:"rgba(255,255,255,0.45)" }}>100%</span>
+                      </div>
+                      <p className="text-[11px] font-medium leading-relaxed mb-2.5" style={{ color:"rgba(255,255,255,0.65)" }}>{consumedMsg}</p>
+                      <div className="h-0.75 rounded-full overflow-hidden" style={{ background:"rgba(255,255,255,0.15)" }}>
+                        <motion.div
+                          initial={{ width:0 }} animate={{ width:"100%" }}
+                          transition={{ duration:0.9, ease:"easeOut", delay:0.2 }}
+                          className="h-full rounded-full" style={{ background:"rgba(255,255,255,0.85)" }}
+                        />
+                      </div>
+                    </div>
+                  </motion.div>
+                )}
+
+                <AnimatePresence>
+                  {unsafeWarn && !isUsed && !isWasted && (
+                    <motion.div
+                      initial={{ opacity:0, height:0 }} animate={{ opacity:1, height:"auto" }} exit={{ opacity:0, height:0 }}
+                      className="mb-3 px-3 py-2 rounded-xl border flex items-start gap-2 text-xs font-semibold overflow-hidden"
+                      style={{ background:"#FFF1F2", borderColor:"#FECACA", color:"#BE123C" }}
+                    >
+                      <AlertOctagon size={13} className="shrink-0 mt-0.5"/>
+                      {unsafeWarn.msg}
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+
+                <AnimatePresence>
+                  {realWorldWarn && (
+                    <motion.div
+                      initial={{ opacity:0, height:0 }} animate={{ opacity:1, height:"auto" }} exit={{ opacity:0, height:0 }}
+                      className="mb-3 px-3 py-2.5 rounded-xl border flex items-start gap-2 text-xs font-semibold overflow-hidden"
+                      style={{ background:"#FFFBEB", borderColor:"#FDE68A", color:"#92400E" }}
+                    >
+                      <AlertTriangle size={13} className="shrink-0 mt-0.5 text-amber-500"/>
+                      <span>{realWorldWarn}</span>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+
+                <div className="flex items-start justify-between gap-3 mb-4">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <motion.div
+                      whileHover={{ scale:1.12, rotate:5, transition:{ type:"spring", stiffness:500, damping:18 } }}
+                      style={{ willChange:"transform" }}
+                      className={`shrink-0 w-10 h-10 rounded-xl flex items-center justify-center bg-linear-to-br ${cfg.stripe} shadow-sm`}
+                    >
+                      <BIcon size={18} className="text-white"/>
+                    </motion.div>
+                    <div className="min-w-0">
+                      <h3 className="font-bold text-gray-900 text-base leading-tight truncate">{product.name}</h3>
+                      <span className="text-xs text-gray-400 flex items-center gap-1 mt-0.5">
+                        <Tag size={10}/>{product.category || "Uncategorised"}
+                      </span>
+                    </div>
+                  </div>
+                  <span
+                    className="shrink-0 text-[11px] font-bold px-2.5 py-1 rounded-full border flex items-center gap-1"
+                    style={{ background:`${smartStatus.color}15`, color:smartStatus.color, borderColor:`${smartStatus.color}30` }}
+                  >
+                    <smartStatus.icon size={10}/>
+                    {smartStatus.label}
+                  </span>
+                </div>
+
+                {product.notes && (
+                  <div className="flex items-start gap-2.5 text-sm mb-4">
+                    <div className="w-7 h-7 rounded-lg bg-gray-100 flex items-center justify-center shrink-0 mt-0.5">
+                      <StickyNote size={13} className="text-gray-400"/>
+                    </div>
+                    <span className="text-gray-400 italic line-clamp-1">"{product.notes}"</span>
+                  </div>
+                )}
+
+                {/* Inline Freshness Engine Text with Calendar Date */}
+                {isActive && !isUsed && days >= 0 && !realWorldWarn && (
+                  <div className="mb-3 flex items-center gap-2 flex-wrap">
+                    <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-[11px] font-bold text-gray-900 bg-white border border-gray-200 shadow-sm">
+                      {bucket === "expiringSoon"
+                        ? `Based on ${product.location || "storage"}, use within ${days} day${days !== 1 ? "s" : ""}`
+                        : `Based on ${product.location || "storage"}, safe for ~${Math.max(0, days - warnWin)} more days`
+                      }
+                    </div>
+                    <div className="h-4 w-px bg-gray-300"></div>
+                    <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-bold text-gray-700 bg-gray-50 border border-gray-200">
+                      <Calendar size={10} className="text-gray-500" />
+                      {new Date(product.expiryDate).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}
+                    </div>
+                  </div>
+                )}
+
+                <AnimatePresence>
+                  {afterExpiry && (
+                    <motion.div
+                      initial={{ opacity:0, height:0 }} animate={{ opacity:1, height:"auto" }} exit={{ opacity:0, height:0 }}
+                      className="mb-3 px-3 py-2 rounded-xl border flex items-start gap-2 text-xs font-semibold overflow-hidden"
+                      style={{
+                        background:  afterExpiry==="risky"?"#FFF1F2":afterExpiry==="quality_reduce"?"#F5F3FF":"#FFFBEB",
+                        borderColor: afterExpiry==="risky"?"#FECACA":afterExpiry==="quality_reduce"?"#DDD6FE":"#FDE68A",
+                        color:       afterExpiry==="risky"?"#BE123C":afterExpiry==="quality_reduce"?"#6D28D9":"#92400E",
+                      }}
+                    >
+                      <Info size={13} className="shrink-0 mt-0.5"/>
+                      {afterExpiry==="risky"
+                        ? `${product.category} past expiry — not recommended. Discard if unsure.`
+                        : afterExpiry==="quality_reduce"
+                          ? "Frozen past expiry — still safe but quality may have reduced."
+                          : afterExpiry==="probably_safe"
+                            ? `${product.category} may still be okay — check for spoilage before consuming.`
+                            : "Check for spoilage (smell/look) before consuming."
+                      }
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+
+                {isActive && !isUsed && days >= 0 && !realWorldWarn && (
+                  <div className="mb-4">
+                    <div className="flex justify-between text-[11px] font-semibold mb-1.5">
+                      <span className="font-bold text-black">Freshness</span>
+                      <span style={{ color:lblColor }}>{pct}%</span>
+                    </div>
+                    <div className="h-2 bg-gray-200/70 rounded-full overflow-hidden">
+                      <motion.div
+                        initial={{ width:0 }}
+                        animate={{ width:`${Math.max(2,pct)}%` }}
+                        transition={{ duration:0.9, ease:"easeOut" }}
+                        className="h-full rounded-full"
+                        style={{ background:barColor }}
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {/* Button order: Delete on left, Edit and Used on right */}
+                {!selectMode && (
+                  <div className="flex gap-2 pt-3 border-t border-gray-100">
+                    <motion.button
+                      whileTap={{ scale:0.88, transition:{ duration:0.06 } }}
+                      onClick={(e) => onDeleteProduct(product._id, e)}
+                      className="flex items-center gap-1.5 text-xs font-bold bg-white px-3 py-2 rounded-xl transition-colors"
+                      style={{ border:"2px solid #FF0000", color:"#FF0000" }}
+                    >
+                      <Trash2 size={13} color="#FF0000"/> 
+                      <span className="whitespace-nowrap">Delete</span>
+                    </motion.button>
+
+                    <div className="flex gap-2 ml-auto">
+                      <motion.button
+                        whileTap={{ scale:0.88, transition:{ duration:0.06 } }}
+                        onClick={(e) => onStartEdit(product, e)}
+                        className="flex items-center gap-1.5 text-xs font-bold text-white px-3 py-2 rounded-xl transition-colors shadow-sm"
+                        style={{ backgroundColor:"#111111" }}
+                      >
+                        <Edit2 size={13} color="white"/> 
+                        <span className="whitespace-nowrap">Edit</span>
+                      </motion.button>
+
+                      {isActive && !isExpired && !hideUsedBtn && (
+                        <motion.button
+                          whileTap={{ scale:0.88, transition:{ duration:0.06 } }}
+                          onClick={(e) => onMarkUsed(product._id, e)}
+                          className="flex items-center gap-1.5 text-xs font-bold text-white px-3 py-2 rounded-xl transition-colors shadow-sm"
+                          style={{ background:"linear-gradient(to right, #48A111, #3a8a0d)" }}
+                        >
+                          <CheckCircle size={13}/> 
+                          <span className="whitespace-nowrap">Used</span>
+                        </motion.button>
+                      )}
+
+                      {(isUsed || isWasted) && (
+                        <motion.button
+                          whileTap={{ scale:0.88, transition:{ duration:0.06 } }}
+                          onClick={(e) => { e.stopPropagation(); onUpdateStatus(product._id, "active"); }}
+                          className="flex items-center gap-1.5 text-xs font-bold bg-linear-to-r from-blue-500 to-indigo-600 text-white px-3 py-2 rounded-xl transition-colors shadow-sm"
+                        >
+                          <RotateCcw size={13}/> 
+                          <span className="whitespace-nowrap">Restore</span>
+                        </motion.button>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {selectMode && (
+                  <div className="pt-3 border-t border-gray-100 text-center">
+                    <span className="text-xs text-gray-400 font-medium">
+                      {isSelected ? "✓ Selected" : "Tap to select"}
+                    </span>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        </div>
+      </motion.div>
+    </AnimatedItem>
+  );
+}
