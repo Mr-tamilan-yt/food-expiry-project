@@ -387,7 +387,16 @@ export default function ProductList() {
     setSelectedIds(new Set(visible.map(p => p._id)));
   }, [visible]);
 
-  // ── Bulk Actions (Order: Delete, Restore, Used) ──────────────────────────
+  // Get selected products to determine which buttons to show
+  const selectedProducts = Array.from(selectedIds).map(id => products.find(p => p._id === id)).filter(Boolean);
+  const hasNonUsedSelected = selectedProducts.some(p => getProductBucket(p) !== "used");
+  const hasUsedSelected = selectedProducts.some(p => getProductBucket(p) === "used");
+  const hasExpiringSoonOrFresh = selectedProducts.some(p => {
+    const bucket = getProductBucket(p);
+    return bucket === "expiringSoon" || bucket === "fresh";
+  });
+
+  // ── Bulk Actions with validation ──────────────────────────────────────────
   const handleBulkDelete = useCallback(async () => {
     if (selectedIds.size === 0) return;
     if (!window.confirm(`Delete ${selectedIds.size} item${selectedIds.size > 1 ? "s" : ""}?`)) return;
@@ -405,6 +414,15 @@ export default function ProductList() {
 
   const handleBulkRestore = useCallback(async () => {
     if (selectedIds.size === 0) return;
+    // Check if any selected item is not "used" - if so, show alert and return
+    if (hasExpiringSoonOrFresh) {
+      alert("Cannot restore fresh or expiring soon items. Only used items can be restored.");
+      return;
+    }
+    if (!hasUsedSelected) {
+      alert("No used items selected to restore.");
+      return;
+    }
     setBulkLoading(true);
     const ids = [...selectedIds];
     setAnimatingOut(new Set(ids));
@@ -415,10 +433,15 @@ export default function ProductList() {
       exitSelectMode();
       setBulkLoading(false);
     }, 220);
-  }, [selectedIds, exitSelectMode]);
+  }, [selectedIds, exitSelectMode, hasExpiringSoonOrFresh, hasUsedSelected]);
 
   const handleBulkUsed = useCallback(async () => {
     if (selectedIds.size === 0) return;
+    // Check if any selected item is already "used"
+    if (hasUsedSelected) {
+      alert("Cannot mark used items as used again. Only non-used items can be marked as used.");
+      return;
+    }
     setBulkLoading(true);
     const ids = [...selectedIds];
     setAnimatingOut(new Set(ids));
@@ -429,7 +452,7 @@ export default function ProductList() {
       exitSelectMode();
       setBulkLoading(false);
     }, 220);
-  }, [selectedIds, exitSelectMode]);
+  }, [selectedIds, exitSelectMode, hasUsedSelected]);
 
   if (loading) return (
     <div className="flex justify-center items-center min-h-64">
@@ -653,7 +676,7 @@ export default function ProductList() {
         </div>
       </motion.div>
 
-      {/* SELECT MODE BANNER — Order: Delete, Restore, Used */}
+      {/* SELECT MODE BANNER — with conditional button visibility */}
       <AnimatePresence>
         {selectMode && (
           <motion.div
@@ -674,7 +697,7 @@ export default function ProductList() {
             >
               {selectedIds.size}
             </div>
-            <span className="text-white font-bold text-sm flex-1 min-w-[80px]">
+            <span className="text-white font-bold text-sm flex-1 min-w-20">
               {selectedIds.size} item{selectedIds.size !== 1 ? "s" : ""} selected
             </span>
 
@@ -687,7 +710,7 @@ export default function ProductList() {
               All
             </button>
 
-            {/* Delete Button - First */}
+            {/* Delete Button - Always visible */}
             <motion.button
               whileTap={{ scale:0.94 }}
               onClick={handleBulkDelete}
@@ -699,29 +722,33 @@ export default function ProductList() {
               <span className="hidden sm:inline">Delete</span>
             </motion.button>
 
-            {/* Restore Button - Second */}
-            <motion.button
-              whileTap={{ scale:0.94 }}
-              onClick={handleBulkRestore}
-              disabled={bulkLoading || selectedIds.size === 0}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-bold transition-all disabled:opacity-50 shrink-0"
-              style={{ background:"rgba(59,130,246,0.9)", color:"white" }}
-            >
-              {bulkLoading ? <RefreshCw size={14} className="animate-spin"/> : <RotateCcw size={14}/>}
-              <span className="hidden sm:inline">Restore</span>
-            </motion.button>
+            {/* Restore Button - Only show if selected items are all "used" (no fresh/expiring soon) */}
+            {!hasExpiringSoonOrFresh && hasUsedSelected && (
+              <motion.button
+                whileTap={{ scale:0.94 }}
+                onClick={handleBulkRestore}
+                disabled={bulkLoading || selectedIds.size === 0}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-bold transition-all disabled:opacity-50 shrink-0"
+                style={{ background:"rgba(59,130,246,0.9)", color:"white" }}
+              >
+                {bulkLoading ? <RefreshCw size={14} className="animate-spin"/> : <RotateCcw size={14}/>}
+                <span className="hidden sm:inline">Restore</span>
+              </motion.button>
+            )}
 
-            {/* Used Button - Third */}
-            <motion.button
-              whileTap={{ scale:0.94 }}
-              onClick={handleBulkUsed}
-              disabled={bulkLoading || selectedIds.size === 0}
-              className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-bold transition-all disabled:opacity-50 shrink-0"
-              style={{ background:"rgba(255,255,255,0.92)", color:"#19510A" }}
-            >
-              {bulkLoading ? <RefreshCw size={14} className="animate-spin"/> : <CheckCircle size={14}/>}
-              <span className="hidden sm:inline">Used</span>
-            </motion.button>
+            {/* Used Button - Only show if no used items are selected */}
+            {!hasUsedSelected && hasNonUsedSelected && (
+              <motion.button
+                whileTap={{ scale:0.94 }}
+                onClick={handleBulkUsed}
+                disabled={bulkLoading || selectedIds.size === 0}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-bold transition-all disabled:opacity-50 shrink-0"
+                style={{ background:"rgba(255,255,255,0.92)", color:"#19510A" }}
+              >
+                {bulkLoading ? <RefreshCw size={14} className="animate-spin"/> : <CheckCircle size={14}/>}
+                <span className="hidden sm:inline">Used</span>
+              </motion.button>
+            )}
 
             {/* Cancel */}
             <motion.button
@@ -1148,7 +1175,7 @@ function ProductCard({
 
                 {/* Button order: Delete on left, Edit and Used on right */}
                 {!selectMode && (
-                  <div className="flex gap-2 pt-3 border-t border-gray-100">
+                  <div className="flex gap-2 pt-3 border-t border-gray-100 flex-wrap">
                     <motion.button
                       whileTap={{ scale:0.88, transition:{ duration:0.06 } }}
                       onClick={(e) => onDeleteProduct(product._id, e)}
